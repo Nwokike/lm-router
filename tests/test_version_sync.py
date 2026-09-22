@@ -5,7 +5,7 @@ import json
 import tomllib
 from pathlib import Path
 
-from core.constants import APP_VERSION
+from core.constants import APP_VERSION, BUILD_NUMBER
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,6 +26,7 @@ def test_app_version_matches_everywhere() -> None:
 def test_build_number_matches() -> None:
     pyproject, version = _load()
     assert pyproject["tool"]["flet"]["build_number"] == version["build_number"]
+    assert version["build_number"] == BUILD_NUMBER
 
 
 def test_engine_pin_matches_bundled_file() -> None:

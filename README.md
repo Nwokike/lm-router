@@ -14,9 +14,9 @@
 
 | Platform | Package |
 |---|---|
-| Android | `LMRouter-arm64-v8a.apk` / `LMRouter-x86_64.apk` (split builds), AAB for Play |
-| Windows | `LMRouter_Setup.exe` |
-| Linux | `.deb` / `.rpm` / `.tar.gz` |
+| Android | split APKs per ABI (`arm64-v8a`, `x86_64`) plus a universal AAB for Play |
+| Windows | `LMRouter.exe` installer |
+| Linux | `LMRouter.deb` / `LMRouter.rpm` / `LMRouter.tar.gz` |
 | Source | `git clone https://github.com/Nwokike/lm-router` |
 
 *Badges and direct links added after the first release build.*
