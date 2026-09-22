@@ -24,6 +24,7 @@ class ControllerMethods:
     # chat
     send_message: Callable[[str], None] = _noop
     stop_generation: Callable[[], None] = _noop
+    set_model: Callable[[str], None] = _noop
     new_conversation: Callable[[], None] = _noop
     open_conversation: Callable[[str], None] = _noop
     delete_conversation: Callable[[str], None] = _noop
