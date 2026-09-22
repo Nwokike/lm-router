@@ -43,6 +43,7 @@ class ControllerMethods:
     test_mcp_server: Callable[[str, object], None] = _noop  # (server_id, done_callback)
     clear_history: Callable[[], None] = _noop
     check_update: Callable[[], None] = _noop
+    quit_app: Callable[[], None] = _noop
 
 
 ControllerMethodsCtx = ft.create_context(ControllerMethods())

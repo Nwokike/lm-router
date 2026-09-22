@@ -30,6 +30,7 @@ REDACTIONS: list[tuple[re.Pattern[str], str]] = [
 
 _ring: deque[dict] = deque(maxlen=constants.LOG_RING_SIZE)
 _handler_installed = False
+on_record = None  # optional zero-arg callback (set by AppController to bump UI state)
 
 
 def redact(text: str) -> str:
@@ -53,6 +54,11 @@ class RingHandler(logging.Handler):
                 "msg": message,
             }
         )
+        if on_record is not None:
+            try:
+                on_record()
+            except Exception as exc:  # callback errors must never break logging
+                _ = exc
 
 
 def get_logger(name: str) -> logging.Logger:

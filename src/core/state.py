@@ -24,6 +24,7 @@ class AppState:
     ad_can_request: bool = False
     sent_count: int = 0
     update_info: dict | None = None
+    log_version: int = 0  # bumped when the log ring changes (re-renders Server screen)
 
     def __init__(self) -> None:
         self.gateway_base_url = f"http://127.0.0.1:{8082}/v1"

@@ -16,6 +16,7 @@ wheels/
 # App runtime state (dev runs from repo root)
 app_settings.json
 app_settings.json.bak
+engine_local.py
 providers.json
 conversations/
 logs.json
