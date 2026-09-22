@@ -2,6 +2,7 @@
 
 import flet as ft
 
+from components.banner_ad import build_banner_ad
 from core.state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
 
@@ -64,6 +65,49 @@ def ChatScreen():
                     ],
                 )
             )
+        elif role == "tool":
+            rows.append(
+                ft.Container(
+                    padding=10,
+                    border_radius=10,
+                    bgcolor=ft.Colors.SURFACE_CONTAINER,
+                    content=ft.Column(
+                        spacing=4,
+                        controls=[
+                            ft.Row(
+                                spacing=6,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                controls=[
+                                    ft.Icon(
+                                        ft.Icons.SEARCH_ROUNDED,
+                                        size=16,
+                                        color=ft.Colors.ON_SURFACE_VARIANT,
+                                    ),
+                                    ft.Text(
+                                        message.get("name", "tool"),
+                                        size=12,
+                                        family="monospace",
+                                        weight=ft.FontWeight.W_600,
+                                    ),
+                                    ft.Text(
+                                        "error" if message.get("is_error") else "tool",
+                                        size=10,
+                                        color=ft.Colors.ERROR
+                                        if message.get("is_error")
+                                        else ft.Colors.ON_SURFACE_VARIANT,
+                                    ),
+                                ],
+                            ),
+                            ft.Text(
+                                message.get("content", ""),
+                                size=12,
+                                selectable=True,
+                                color=ft.Colors.ON_SURFACE_VARIANT,
+                            ),
+                        ],
+                    ),
+                )
+            )
         elif role == "error":
             rows.append(
                 ft.Row(
@@ -101,6 +145,16 @@ def ChatScreen():
                 ft.Column(
                     spacing=4,
                     controls=[body] + ([caption] if caption is not None else []),
+                )
+            )
+
+    if state.busy:
+        last_role = state.messages[-1].get("role") if state.messages else None
+        if last_role in ("user", "tool"):
+            rows.append(
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    controls=[ft.ProgressRing(width=16, height=16, stroke_width=2)],
                 )
             )
 
@@ -182,5 +236,6 @@ def ChatScreen():
                 auto_scroll_animation=0,
             ),
             composer,
+            build_banner_ad(),
         ],
     )

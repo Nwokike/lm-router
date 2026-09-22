@@ -27,6 +27,7 @@ OPACITY_LIGHT = 0.12
 OPACITY_MUTED = 0.5
 ANIM_SLOW = 300
 RADIUS_MD = 12
+RADIUS_LG = 16
 RADIUS_XL = 26
 
 __all__ = [
@@ -49,5 +50,6 @@ __all__ = [
     "OPACITY_MUTED",
     "ANIM_SLOW",
     "RADIUS_MD",
+    "RADIUS_LG",
     "RADIUS_XL",
 ]

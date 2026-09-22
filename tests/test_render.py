@@ -74,13 +74,21 @@ def _render(component_fn):
 def test_all_screens_render(_renderer_page):
     from app_shell import AppShell
     from screens.chat_screen import ChatScreen
+    from screens.history_screen import HistoryScreen
+    from screens.onboarding_screen import OnboardingScreen
     from screens.server_screen import ServerScreen
     from screens.settings_screen import SettingsScreen
     from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
 
     roots = []
     try:
-        for component in (ChatScreen, ServerScreen, SettingsScreen):
+        for component in (
+            OnboardingScreen,
+            ChatScreen,
+            ServerScreen,
+            SettingsScreen,
+            HistoryScreen,
+        ):
             roots.append(_render(component))
         shell_root = Renderer().render(
             lambda: ControllerMethodsCtx(ControllerMethods(), lambda: AppShell())

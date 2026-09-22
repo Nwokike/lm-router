@@ -7,13 +7,20 @@ from typing import Any
 import flet as ft
 
 from app_shell import AppShell
+from components.connectivity_monitor import start_connectivity_monitor
+from components.update_dialog import build_update_dialog
 from core import constants, theme
 from core.logging import LOG
-from core.settings import AppSettings
+from core.settings import AppSettings, MCPServerConfig, ProviderConfig
 from core.state import state
+from services import history
+from services.ad_service import AdService
 from services.agent import AgentService
 from services.engine import EngineService
 from services.http import HttpService
+from services.mcp import MCPHub, enabled_params
+from services.search import build_search_tool
+from services.update_service import UpdateService
 from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
 from state.service_ctx import ServiceCtx, Services
 
@@ -31,6 +38,7 @@ class AppController:
         self.services = Services()
         self.methods = ControllerMethods()
         self._url_launcher: object | None = None
+        self.ads: AdService | None = None
 
     def init(self) -> None:
         page = self.page
@@ -57,11 +65,14 @@ class AppController:
         # services
         http = HttpService()
         engine = EngineService(settings)
-        agent = AgentService(settings)
+        hub = MCPHub(settings)
+        agent = AgentService(settings, extra_tools=self._extra_tools)
         self.services.settings = settings
         self.services.http = http
         self.services.engine = engine
+        self.services.mcp = hub
         self.services.agent = agent
+        self._search_tool = build_search_tool(http)
         agent.start()  # anyio portal thread: hosts kani turns and httpx calls
         try:
             self._url_launcher = ft.UrlLauncher()
@@ -72,6 +83,26 @@ class AppController:
             page.services.append(ft.HapticFeedback())
         except Exception as exc:
             LOG.info("haptics unavailable: %s", exc)
+
+        # conversation catalog on boot, fresh id for new chats
+        state.conversations = history.list_conversations()
+        if not state.active_conversation:
+            history.start_conversation()
+
+        # connectivity: OS events + HTTP confirm, banner rendered by the shell
+        try:
+            page.services.append(ft.Connectivity())
+        except Exception as exc:
+            LOG.info("connectivity service unavailable: %s", exc)
+        page.run_task(start_connectivity_monitor, page)
+
+        # ads: UMP consent then preload (gates live inside AdService)
+        self.ads = AdService(page)
+        page.run_task(self._boot_ads)
+
+        # connect any enabled MCP servers once, up front (long-lived hold)
+        if settings.mcp_servers:
+            self._reapply_mcp(blocking=True)
 
         # controllers wired for this step (later steps extend the same object)
         m = self.methods
@@ -88,6 +119,20 @@ class AppController:
         m.new_conversation = self._new_conversation
         m.finish_onboarding = self._finish_onboarding
         m.open_url = self._open_url
+        m.add_mcp_server = self._add_mcp_server
+        m.remove_mcp_server = self._remove_mcp_server
+        m.toggle_mcp_server = self._toggle_mcp_server
+        m.test_mcp_server = self._test_mcp_server
+        m.save_settings = self._save_settings
+        m.add_provider = self._add_provider
+        m.remove_provider = self._remove_provider
+        m.select_provider = self._select_provider
+        m.clear_history = self._clear_history
+        m.open_conversation = self._open_conversation
+        m.delete_conversation = self._delete_conversation
+        m.check_update = lambda: self.page.run_task(self._check_update)
+        m.open_update_dialog = self._open_update_dialog
+        m.dismiss_update = self._dismiss_update
 
         import core.logging as applog
 
@@ -96,6 +141,8 @@ class AppController:
 
         if settings.gateway_autostart:
             page.run_thread(self._start_gateway_quiet)
+        if settings.update_check:
+            page.run_task(self._check_update, True)
 
     # controller implementations
 
@@ -182,6 +229,7 @@ class AppController:
     def _new_conversation(self) -> None:
         state.messages = []
         self.services.agent.reset_conversation()
+        history.start_conversation()
 
     def _stop_generation(self) -> None:
         self.services.agent.stop_turn()
@@ -217,6 +265,17 @@ class AppController:
                 buffer["last"] = now
                 flush()
 
+        def on_tool(name: str, content: str, is_error: bool) -> None:
+            state.messages.append(
+                {
+                    "role": "tool",
+                    "name": name,
+                    "content": content[:6000],
+                    "is_error": is_error,
+                }
+            )
+            LOG.info("tool result: %s%s", name, " (error)" if is_error else "")
+
         def on_done(message: Any, usage: dict | None) -> None:
             final = buffer["text"] or str(getattr(message, "text", "") or "")
             entry: dict = {"role": "assistant", "content": final}
@@ -224,6 +283,9 @@ class AppController:
                 entry["usage"] = usage
             state.messages[index] = entry
             state.busy = False
+            state.sent_count += 1
+            history.save_conversation(self.services.agent)
+            self._maybe_show_interstitial()
             LOG.info("turn done: %s tokens", (usage or {}).get("total_tokens", "?"))
 
         def on_error(kind: str, content: str) -> None:
@@ -239,7 +301,7 @@ class AppController:
                 LOG.warning("turn error (%s): %s", kind, content)
             state.busy = False
 
-        started = agent.start_turn(text, on_delta, on_done, on_error)
+        started = agent.start_turn(text, on_delta, on_done, on_error, on_tool=on_tool)
         if not started:
             tail = state.messages[-1]
             if tail.get("role") == "assistant" and tail.get("content") == "":
@@ -256,6 +318,185 @@ class AppController:
             self.page.run_thread(lambda: launcher.launch_url(url))
         except Exception as exc:
             LOG.warning("open console failed: %s", exc)
+
+    def _extra_tools(self) -> tuple[list, object]:
+        """(tools, generation) for AgentService; rebuilds kani on change."""
+        tools: list = []
+        if self.settings.search_enabled and self._search_tool is not None:
+            tools.append(self._search_tool)
+        tools.extend(self.services.mcp.tools)
+        return tools, f"{self.services.mcp.generation}:{self.settings.search_enabled}"
+
+    def _reapply_mcp(self, blocking: bool = False) -> None:
+        hub = self.services.mcp
+        agent = self.services.agent
+        params = enabled_params(self.settings)
+
+        def work() -> None:
+            async def apply() -> None:
+                await hub.apply(params)
+
+            try:
+                agent.call(apply)
+            except Exception as exc:
+                LOG.warning("mcp apply failed: %s", exc)
+                return
+            state.mcp_tools = list(hub.names)
+            LOG.info("mcp tools active: %d", len(hub.names))
+
+        if blocking:
+            work()
+        else:
+            self.page.run_thread(work)
+
+    def _add_mcp_server(self, data: dict) -> None:
+        try:
+            self.settings.mcp_servers.append(MCPServerConfig(**data))
+        except Exception as exc:
+            LOG.warning("invalid mcp server: %s", exc)
+            return
+        self.settings.save()
+        self._reapply_mcp()
+
+    def _remove_mcp_server(self, server_id: str) -> None:
+        self.settings.mcp_servers = [s for s in self.settings.mcp_servers if s.id != server_id]
+        self.settings.save()
+        self._reapply_mcp()
+
+    def _toggle_mcp_server(self, server_id: str) -> None:
+        for server in self.settings.mcp_servers:
+            if server.id == server_id:
+                server.enabled = not server.enabled
+        self.settings.save()
+        self._reapply_mcp()
+
+    def _test_mcp_server(self, server_id: str, done_cb) -> None:
+        hub = self.services.mcp
+        agent = self.services.agent
+        target = next((s for s in self.settings.mcp_servers if s.id == server_id), None)
+        if target is None:
+            done_cb(("err", "Server not found."))
+            return
+
+        def work() -> None:
+            async def probe() -> list:
+                return await hub.test(target)
+
+            try:
+                names = agent.call(probe)
+            except Exception as exc:
+                done_cb(("err", str(exc)[:300]))
+                return
+            done_cb(("ok", names))
+
+        self.page.run_thread(work)
+
+    def _save_settings(self, data: dict) -> None:
+        allowed = {
+            "theme",
+            "gateway_port",
+            "gateway_autostart",
+            "system_prompt",
+            "search_enabled",
+            "interstitial_every",
+            "update_check",
+            "max_context_tokens",
+        }
+        updates = {k: v for k, v in data.items() if k in allowed}
+        if not updates:
+            return
+        previous = {k: getattr(self.settings, k) for k in updates}
+        try:
+            for key, value in updates.items():
+                setattr(self.settings, key, value)
+        except Exception as exc:
+            LOG.warning("settings value rejected (%s); reverting", exc)
+            for key, value in previous.items():
+                try:
+                    setattr(self.settings, key, value)
+                except Exception as revert_exc:
+                    LOG.debug("revert %s failed: %s", key, revert_exc)
+            return
+        self.settings.save()
+        state.settings_version += 1
+
+    def _add_provider(self, data: dict) -> None:
+        try:
+            provider = ProviderConfig(**data)
+        except Exception as exc:
+            LOG.warning("invalid provider: %s", exc)
+            return
+        self.settings.providers.append(provider)
+        self.settings.save()
+        state.settings_version += 1
+
+    def _remove_provider(self, provider_id: str) -> None:
+        self.settings.providers = [p for p in self.settings.providers if p.id != provider_id]
+        if self.settings.active_provider_id == provider_id:
+            self.settings.active_provider_id = ""
+        self.settings.save()
+        state.settings_version += 1
+
+    def _select_provider(self, provider_id: str) -> None:
+        if not any(p.id == provider_id for p in self.settings.providers):
+            return
+        self.settings.active_provider_id = provider_id
+        self.settings.save()
+        state.settings_version += 1
+        LOG.info("active provider: %s", provider_id)
+
+    def _clear_history(self) -> None:
+        history.clear_all()
+        self._new_conversation()
+
+    def _open_conversation(self, conversation_id: str) -> None:
+        agent = self.services.agent
+        if agent.ensure_kani(state.model, self.settings.system_prompt) is None:
+            LOG.warning("cannot open conversation: no model yet")
+            return
+        if history.load_conversation(agent, conversation_id):
+            self._set_tab(0)
+
+    def _delete_conversation(self, conversation_id: str) -> None:
+        history.delete_conversation(conversation_id)
+
+    async def _check_update(self, silent: bool = False) -> None:
+        data = await UpdateService.check_for_updates()
+        if not data:
+            if not silent:
+                LOG.info("no update available")
+            return
+        state.update_info = data
+        if not silent:
+            self._open_update_dialog()
+
+    def _open_update_dialog(self) -> None:
+        if not state.update_info:
+            LOG.info("no update to show")
+            return
+        dialog = build_update_dialog(self.page, state.update_info, self._url_launcher)
+        self.page.show_dialog(dialog)
+
+    def _dismiss_update(self) -> None:
+        try:
+            self.page.pop_dialog()
+        except Exception as exc:
+            LOG.debug("dismiss update: %s", exc)
+        state.update_info = None
+
+    async def _boot_ads(self) -> None:
+        if self.ads is None:
+            return
+        await self.ads.gather_consent()
+        await self.ads.preload_interstitial()
+
+    def _maybe_show_interstitial(self) -> None:
+        every = self.settings.interstitial_every
+        ads = self.ads
+        if ads is None or every < 1:
+            return
+        if state.sent_count and state.sent_count % every == 0:
+            self.page.run_task(ads.show_interstitial)
 
     def _finish_onboarding(self) -> None:
         self.settings.onboarding_done = True

@@ -2,8 +2,12 @@
 
 APP_NAME = "LM Router"
 APP_VERSION = "0.1.0"  # synced with pyproject + version.json by tests/test_version_sync.py
+BUILD_NUMBER = 1  # synced with version.json build_number
 
 ENGINE_URL = "https://router.kiri.ng/run.py"
+GITHUB_RELEASE_URL = "https://github.com/Nwokike/lm-router/releases/latest"
+UPDATE_CONFIG_URL = "https://raw.githubusercontent.com/Nwokike/lm-router/main/version.json"
+PLAYSTORE_URL = ""
 DEFAULT_GATEWAY_PORT = 8082
 
 SETTINGS_FILE = "app_settings.json"

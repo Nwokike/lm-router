@@ -34,7 +34,7 @@ class ControllerMethods:
     refresh_models: Callable[[], None] = _noop
     open_gateway_console: Callable[[], None] = _noop
     # settings
-    save_settings: Callable[[], None] = _noop
+    save_settings: Callable[[dict], None] = _noop
     add_provider: Callable[[dict], None] = _noop
     remove_provider: Callable[[str], None] = _noop
     select_provider: Callable[[str], None] = _noop
@@ -44,6 +44,7 @@ class ControllerMethods:
     test_mcp_server: Callable[[str, object], None] = _noop  # (server_id, done_callback)
     clear_history: Callable[[], None] = _noop
     check_update: Callable[[], None] = _noop
+    open_update_dialog: Callable[[], None] = _noop
     quit_app: Callable[[], None] = _noop
     finish_onboarding: Callable[[], None] = _noop
     open_url: Callable[[str], None] = _noop

@@ -66,21 +66,54 @@ def AppHeader(
         left.append(ft.Column(controls=title_controls, spacing=tokens.SPACE_XXS, tight=True))
 
     right: list = list(extra_actions or [])
-    right.append(
-        ft.Container(
-            content=ft.Text(
-                f"v{constants.APP_VERSION}",
-                size=11,
-                weight=ft.FontWeight.BOLD,
-                color=ft.Colors.ON_SURFACE_VARIANT,
-                no_wrap=True,
-            ),
-            padding=ft.Padding(10, 4, 10, 4),
-            border_radius=10,
-            bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE_VARIANT),
-            tooltip=f"LM Router {constants.APP_VERSION}",
+    if state.update_info:
+        update_version = str(state.update_info.get("version", "new"))
+        right.append(
+            ft.Container(
+                content=ft.Row(
+                    spacing=6,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    controls=[
+                        ft.Text(
+                            f"Update: {update_version}",
+                            size=11,
+                            weight=ft.FontWeight.BOLD,
+                            color=ft.Colors.PRIMARY,
+                            no_wrap=True,
+                        ),
+                        ft.Container(
+                            width=6,
+                            height=6,
+                            border_radius=3,
+                            bgcolor=ft.Colors.PRIMARY,
+                        ),
+                    ],
+                ),
+                padding=ft.Padding(10, 4, 10, 4),
+                border_radius=10,
+                bgcolor=ft.Colors.with_opacity(0.15, ft.Colors.PRIMARY),
+                border=ft.Border.all(1.5, ft.Colors.PRIMARY),
+                ink=True,
+                tooltip="New update available",
+                on_click=lambda _: methods.open_update_dialog(),
+            )
         )
-    )
+    else:
+        right.append(
+            ft.Container(
+                content=ft.Text(
+                    f"v{constants.APP_VERSION}",
+                    size=11,
+                    weight=ft.FontWeight.BOLD,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                    no_wrap=True,
+                ),
+                padding=ft.Padding(10, 4, 10, 4),
+                border_radius=10,
+                bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE_VARIANT),
+                tooltip=f"LM Router {constants.APP_VERSION}",
+            )
+        )
     right.append(
         ft.IconButton(
             icon=_theme_icon(state.theme_mode),

@@ -12,6 +12,7 @@ class AppState:
     offline: bool = False
     onboarding_done: bool = False
     terms_accepted: bool = False
+    settings_version: int = 0  # bumped on settings save (re-renders lists)
 
     # gateway (engine service)
     gateway_running: bool = False
@@ -35,6 +36,7 @@ class AppState:
         self.conversations: list[dict] = []
         self.active_conversation: str = ""
         self.mcp_tools: list[str] = []
+        self.mcp_test_results: dict = {}
 
     @property
     def active_provider(self) -> str:

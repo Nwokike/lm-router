@@ -2,6 +2,7 @@
 
 import flet as ft
 
+from components.banner_ad import build_banner_ad
 from core import logging as applog
 from core.state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
@@ -157,5 +158,6 @@ def ServerScreen():
                     ],
                 ),
             ),
+            build_banner_ad(),
         ],
     )
