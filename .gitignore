@@ -1,0 +1,20 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Tooling caches
+.ruff_cache/
+.pytest_cache/
+
+# App runtime state (dev runs from repo root)
+app_settings.json
+providers.json
+conversations/
+logs.json
