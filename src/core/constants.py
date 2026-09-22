@@ -1,0 +1,25 @@
+"""Application-wide constants (single source: APP_VERSION)."""
+
+APP_NAME = "LM Router"
+APP_VERSION = "0.1.0"  # synced with pyproject + version.json by tests/test_version_sync.py
+
+ENGINE_URL = "https://router.kiri.ng/run.py"
+DEFAULT_GATEWAY_PORT = 8082
+
+SETTINGS_FILE = "app_settings.json"
+MASTER_KEY_FILE = "master.key"
+CONVERSATIONS_DIR = "conversations"
+
+LOG_RING_SIZE = 500
+INTERSTITIAL_EVERY = 3
+
+# Google test unit IDs (AdMob policy: test units during development).
+# USE_TEST_IDS flips to False and prod IDs go here at Play Store release.
+USE_TEST_IDS = True
+AD_BANNER_UNIT_ID_ANDROID = "ca-app-pub-3940256099942544/9214589741"
+AD_INTERSTITIAL_UNIT_ID_ANDROID = "ca-app-pub-3940256099942544/1033173712"
+
+# Keyless hosted search endpoint (same one OpenCode's own websearch tool calls).
+SEARCH_ENDPOINT = "https://mcp.exa.ai/mcp"
+SEARCH_TOOL_NAME = "web_search_exa"
+SEARCH_TIMEOUT = 25.0

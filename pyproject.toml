@@ -95,6 +95,9 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py314"
+# The bundled gateway engine is a byte-pinned external artifact (sha recorded
+# in version.json). Never lint or format it: reformatting breaks the pin.
+extend-exclude = ["src/assets/engine"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "S"]
