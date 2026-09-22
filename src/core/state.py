@@ -10,6 +10,8 @@ class AppState:
     active_view: str = "chat"
     theme_mode: str = "system"
     offline: bool = False
+    onboarding_done: bool = False
+    terms_accepted: bool = False
 
     # gateway (engine service)
     gateway_running: bool = False

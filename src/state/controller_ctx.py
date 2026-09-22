@@ -45,6 +45,8 @@ class ControllerMethods:
     clear_history: Callable[[], None] = _noop
     check_update: Callable[[], None] = _noop
     quit_app: Callable[[], None] = _noop
+    finish_onboarding: Callable[[], None] = _noop
+    open_url: Callable[[str], None] = _noop
 
 
 ControllerMethodsCtx = ft.create_context(ControllerMethods())

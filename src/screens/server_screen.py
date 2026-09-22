@@ -57,7 +57,6 @@ def ServerScreen():
         scroll=ft.ScrollMode.AUTO,
         spacing=16,
         controls=[
-            ft.Text("Server", size=24, weight=ft.FontWeight.W_600),
             ft.Container(
                 padding=16,
                 border_radius=12,

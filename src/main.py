@@ -38,6 +38,8 @@ class AppController:
 
         state.theme_mode = settings.theme
         state.gateway_port = settings.gateway_port
+        state.onboarding_done = settings.onboarding_done
+        state.terms_accepted = settings.terms_accepted
         page.theme = theme.get_light_theme()
         page.dark_theme = theme.get_dark_theme()
         page.theme_mode = THEME_MODES.get(settings.theme, ft.ThemeMode.SYSTEM)
@@ -66,6 +68,10 @@ class AppController:
             page.services.append(self._url_launcher)
         except Exception as exc:
             LOG.info("url launcher unavailable: %s", exc)
+        try:
+            page.services.append(ft.HapticFeedback())
+        except Exception as exc:
+            LOG.info("haptics unavailable: %s", exc)
 
         # controllers wired for this step (later steps extend the same object)
         m = self.methods
@@ -80,6 +86,8 @@ class AppController:
         m.stop_generation = self._stop_generation
         m.set_model = self._set_model
         m.new_conversation = self._new_conversation
+        m.finish_onboarding = self._finish_onboarding
+        m.open_url = self._open_url
 
         import core.logging as applog
 
@@ -248,6 +256,24 @@ class AppController:
             self.page.run_thread(lambda: launcher.launch_url(url))
         except Exception as exc:
             LOG.warning("open console failed: %s", exc)
+
+    def _finish_onboarding(self) -> None:
+        self.settings.onboarding_done = True
+        self.settings.terms_accepted = True
+        self.settings.save()
+        state.onboarding_done = True
+        state.terms_accepted = True
+        LOG.info("onboarding complete")
+
+    def _open_url(self, url: str) -> None:
+        launcher = self._url_launcher
+        if launcher is None:
+            LOG.warning("cannot open %s: url launcher missing", url)
+            return
+        try:
+            self.page.run_thread(lambda u=url: launcher.launch_url(u))
+        except Exception as exc:
+            LOG.warning("open url failed: %s", exc)
 
     def _quit_app(self) -> None:
         try:

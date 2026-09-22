@@ -1,9 +1,11 @@
-"""App shell: NavigationBar over the three screens (voicelm pattern)."""
+"""App shell: onboarding gate, then AppHeader + screens over a NavigationBar."""
 
 import flet as ft
 
+from components.app_header import AppHeader
 from core.state import AppStateCtx
 from screens.chat_screen import ChatScreen
+from screens.onboarding_screen import OnboardingScreen
 from screens.server_screen import ServerScreen
 from screens.settings_screen import SettingsScreen
 from state.controller_ctx import ControllerMethodsCtx
@@ -14,10 +16,34 @@ def AppShell():
     state = ft.use_context(AppStateCtx)
     methods = ft.use_context(ControllerMethodsCtx)
 
+    if not state.onboarding_done:
+        return OnboardingScreen(key=ft.ValueKey("view-onboarding"))
+
     views = [
-        ChatScreen(key=ft.ValueKey("view-chat")),
-        ServerScreen(key=ft.ValueKey("view-server")),
-        SettingsScreen(key=ft.ValueKey("view-settings")),
+        ft.Column(
+            expand=True,
+            spacing=0,
+            controls=[
+                AppHeader(title="Chat"),
+                ChatScreen(key=ft.ValueKey("view-chat")),
+            ],
+        ),
+        ft.Column(
+            expand=True,
+            spacing=0,
+            controls=[
+                AppHeader(title="Server"),
+                ServerScreen(key=ft.ValueKey("view-server")),
+            ],
+        ),
+        ft.Column(
+            expand=True,
+            spacing=0,
+            controls=[
+                AppHeader(title="Settings"),
+                SettingsScreen(key=ft.ValueKey("view-settings")),
+            ],
+        ),
     ]
     index = state.selected_tab if 0 <= state.selected_tab < len(views) else 0
 

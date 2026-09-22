@@ -17,9 +17,11 @@ def get_dark_theme() -> ft.Theme:
     return ft.Theme(color_scheme_seed=PRIMARY, font_family=FONT, use_material3=True)
 
 
-def is_dark_mode(page: ft.Page, theme_mode: str) -> bool:
+def is_dark_mode(page: object, theme_mode: str) -> bool:
     if theme_mode == "dark":
         return True
     if theme_mode == "light":
+        return False
+    if page is None:
         return False
     return page.platform_brightness == ft.ThemeMode.DARK
