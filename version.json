@@ -3,10 +3,8 @@
   "version": "0.1.0",
   "type": "update",
   "title": "LM Router 0.1.0",
-  "release_notes": "• First release\n• Chat with free models through your own local gateway\n• Streaming, stop, web search, MCP servers, multi-provider\n• Local server console with live logs\n• Runs fully on your device",
+  "release_notes": "• First release\n• Chat with free models through your own local gateway\n• Streaming, stop, web search, MCP servers, multi-provider\n• Local server console with live logs\n• Local gateway on your device",
   "mandatory": false,
   "github_url": "https://github.com/Nwokike/lm-router/releases/latest",
-  "playstore_url": "",
-  "engine_version": "1.0.0",
-  "engine_sha256": "1bdc21c27101b50965a8376baedbf7113c79d7bc2019d7b5673026e6c79510e2"
+  "playstore_url": "https://play.google.com/store/apps/details?id=ng.kiri.lmrouter"
 }

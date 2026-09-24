@@ -25,6 +25,7 @@ def AppHeader(
     subtitle: str | None = None,
     show_settings: bool = False,
     on_settings: object | None = None,
+    show_quit: bool = False,
     extra_actions: list | None = None,
 ) -> ft.Container:
     page = getattr(ft.context, "page", None)
@@ -52,7 +53,7 @@ def AppHeader(
     ]
     if title:
         title_controls: list = [
-            ft.Text(title, size=tokens.FONT_LG, weight=ft.FontWeight.BOLD, font_family="Outfit")
+            ft.Text(title, size=tokens.FONT_LG, weight=ft.FontWeight.BOLD, font_family="Outfit"),
         ]
         if subtitle:
             title_controls.append(
@@ -61,7 +62,7 @@ def AppHeader(
                     size=tokens.FONT_XS,
                     color=ft.Colors.ON_SURFACE_VARIANT,
                     font_family="Outfit",
-                )
+                ),
             )
         left.append(ft.Column(controls=title_controls, spacing=tokens.SPACE_XXS, tight=True))
 
@@ -96,7 +97,7 @@ def AppHeader(
                 ink=True,
                 tooltip="New update available",
                 on_click=lambda _: methods.open_update_dialog(),
-            )
+            ),
         )
     else:
         right.append(
@@ -111,8 +112,12 @@ def AppHeader(
                 padding=ft.Padding(10, 4, 10, 4),
                 border_radius=10,
                 bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE_VARIANT),
-                tooltip=f"LM Router {constants.APP_VERSION}",
-            )
+                tooltip=f"{constants.APP_NAME} {constants.APP_VERSION} — tap for details",
+                # Only Container is tappable in flet 1.0; this chip used to be
+                # inert, so tapping the version did nothing at all.
+                ink=True,
+                on_click=lambda _: methods.open_about(),
+            ),
         )
     right.append(
         ft.IconButton(
@@ -120,7 +125,7 @@ def AppHeader(
             icon_size=tokens.ICON_SM + 2,
             on_click=_cycle_theme,
             tooltip="Theme: light / dark / system",
-        )
+        ),
     )
     if show_settings and on_settings is not None:
         right.append(
@@ -129,7 +134,20 @@ def AppHeader(
                 icon_size=tokens.ICON_SM + 2,
                 on_click=on_settings,
                 tooltip="Settings",
-            )
+            ),
+        )
+    if show_quit:
+        # Always-present escape hatch: without it, "keep running when closed"
+        # means the app looks like it refuses to quit.
+        right.append(
+            ft.IconButton(
+                icon=ft.Icons.POWER_SETTINGS_NEW_ROUNDED,
+                icon_size=tokens.ICON_SM + 2,
+                # IconButton takes `icon_color`; `color` is not a flet 1.0 property.
+                icon_color=ft.Colors.ERROR,
+                on_click=lambda _: methods.quit_app(),
+                tooltip="Quit LM Router",
+            ),
         )
 
     return ft.Container(

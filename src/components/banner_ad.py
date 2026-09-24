@@ -3,8 +3,9 @@
 import flet as ft
 from flet import Control
 
-from core import constants, tokens
+from core import constants, theme, tokens
 from core.logging import LOG
+from core.state import state
 
 try:
     import flet_ads as fta
@@ -36,6 +37,8 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
             return ft.Container(width=0, height=0)
     except Exception:
         return ft.Container(width=0, height=0)
+
+    is_dark = theme.is_dark_mode(page, state.theme_mode)
     if not constants.USE_TEST_IDS:
         return ft.Container(width=0, height=0)  # prod unit ids not set yet
 
@@ -54,11 +57,15 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
         LOG.warning("ads: banner construction failed: %s", exc)
         return ft.Container(width=0, height=0)
 
+    # Sherlock styling: an adaptive glass card (low-alpha overlay + hairline
+    # border) rather than a flat tonal surface, so it reads as chrome on both
+    # the slate dark background and the light one.
     glass = ft.Container(
         expand=True,
         padding=tokens.SPACE_SM,
         border_radius=tokens.RADIUS_LG,
-        bgcolor=ft.Colors.SURFACE_CONTAINER,
+        bgcolor=theme.glass(is_dark),
+        border=ft.Border.all(1, theme.border(is_dark)),
         content=ft.Column(
             [ft.Container(content=ad, width=320, height=50)],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,

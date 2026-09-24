@@ -3,6 +3,9 @@
 import flet as ft
 
 from components.banner_ad import build_banner_ad
+from components.chat_controls import Composer, SessionBar
+from components.thinking import ThinkingBlock, ToolCallBlock
+from core import theme as app_theme
 from core.state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
 
@@ -11,41 +14,47 @@ from state.controller_ctx import ControllerMethodsCtx
 def ChatScreen():
     state = ft.use_context(AppStateCtx)
     methods = ft.use_context(ControllerMethodsCtx)
-    draft, set_draft = ft.use_state("")
+    page = getattr(ft.context, "page", None)
+    is_dark_page = app_theme.is_dark_mode(page, state.theme_mode)
 
-    def send() -> None:
-        value = draft.strip()
-        if not value:
-            return
-        set_draft("")
-        methods.send_message(value)
+    # Context usage readout, shown only once a turn has reported tokens.
+    context_label = (
+        f"~{state.context_used_tokens / 1000:.1f}k ctx" if state.context_used_tokens > 0 else ""
+    )
 
-    def on_field_submit(_: ft.ControlEvent) -> None:
-        send()
-
-    def on_field_change(e: ft.ControlEvent) -> None:
-        set_draft(str(e.control.value or ""))
-
-    model_ids = [m["id"] for m in state.models if m.get("id")]
-    header = ft.Row(
-        spacing=8,
+    session_bar = ft.Row(
+        spacing=0,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
         controls=[
-            ft.Dropdown(
-                value=state.model or None,
-                options=model_ids,
-                label="Model",
-                expand=True,
-                text_size=13,
-                on_select=lambda e: methods.set_model(str(e.control.value or "")),
+            SessionBar(state=state, methods=methods, is_dark=is_dark_page),
+            ft.Container(expand=True),
+            (
+                ft.Row(
+                    spacing=4,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    controls=[
+                        ft.Icon(
+                            ft.Icons.DATA_SAVER_ON_ROUNDED,
+                            size=14,
+                            color=ft.Colors.PRIMARY,
+                        ),
+                        ft.Text(
+                            context_label,
+                            size=11,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                    ],
+                )
+                if context_label
+                else ft.Container()
             ),
-            ft.ProgressRing(width=16, height=16, stroke_width=2)
-            if state.busy
-            else ft.SizedBox(width=16, height=16),
+            ft.ProgressRing(width=16, height=16, stroke_width=2) if state.busy else ft.Container(),
         ],
     )
 
     rows: list[ft.Control] = []
     last_index = len(state.messages) - 1
+    is_dark = is_dark_page
     for index, message in enumerate(state.messages):
         role = message.get("role", "assistant")
         content = message.get("content", "")
@@ -56,57 +65,28 @@ def ChatScreen():
                     alignment=ft.MainAxisAlignment.END,
                     controls=[
                         ft.Container(
-                            content=ft.Text(content, size=14),
+                            # Container has no `color` in flet 1.0 — the text
+                            # colour belongs on the Text child.
+                            content=ft.Text(
+                                content,
+                                size=14,
+                                color=ft.Colors.ON_PRIMARY_CONTAINER,
+                            ),
                             bgcolor=ft.Colors.PRIMARY_CONTAINER,
-                            color=ft.Colors.ON_PRIMARY_CONTAINER,
                             border_radius=14,
                             padding=10,
-                        )
+                        ),
                     ],
-                )
+                ),
             )
         elif role == "tool":
             rows.append(
-                ft.Container(
-                    padding=10,
-                    border_radius=10,
-                    bgcolor=ft.Colors.SURFACE_CONTAINER,
-                    content=ft.Column(
-                        spacing=4,
-                        controls=[
-                            ft.Row(
-                                spacing=6,
-                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                                controls=[
-                                    ft.Icon(
-                                        ft.Icons.SEARCH_ROUNDED,
-                                        size=16,
-                                        color=ft.Colors.ON_SURFACE_VARIANT,
-                                    ),
-                                    ft.Text(
-                                        message.get("name", "tool"),
-                                        size=12,
-                                        family="monospace",
-                                        weight=ft.FontWeight.W_600,
-                                    ),
-                                    ft.Text(
-                                        "error" if message.get("is_error") else "tool",
-                                        size=10,
-                                        color=ft.Colors.ERROR
-                                        if message.get("is_error")
-                                        else ft.Colors.ON_SURFACE_VARIANT,
-                                    ),
-                                ],
-                            ),
-                            ft.Text(
-                                message.get("content", ""),
-                                size=12,
-                                selectable=True,
-                                color=ft.Colors.ON_SURFACE_VARIANT,
-                            ),
-                        ],
-                    ),
-                )
+                ToolCallBlock(
+                    name=str(message.get("name", "tool")),
+                    content=str(message.get("content", "")),
+                    is_error=bool(message.get("is_error")),
+                    is_dark=is_dark,
+                ),
             )
         elif role == "error":
             rows.append(
@@ -116,7 +96,7 @@ def ChatScreen():
                         ft.Icon(ft.Icons.ERROR, size=18, color=ft.Colors.ERROR),
                         ft.Text(content, size=14, color=ft.Colors.ERROR, selectable=True),
                     ],
-                )
+                ),
             )
         else:
             placeholder = not content and state.busy and index == last_index
@@ -124,28 +104,81 @@ def ChatScreen():
             if placeholder:
                 body = ft.ProgressRing(width=16, height=16, stroke_width=2)
             else:
-                body = ft.Markdown(
-                    content or "…",
-                    selectable=True,
-                    code_theme=ft.MarkdownCodeTheme.MONOKAI,
-                )
+                body = app_theme.markdown(content or "…", is_dark=is_dark)
             usage = message.get("usage")
-            caption = None
+            finish_reason = usage.get("finish_reason") if usage else None
+            caption_parts: list[str] = []
             if usage:
                 in_tokens = usage.get("prompt_tokens", 0)
                 out_tokens = usage.get("completion_tokens", 0)
-                caption = ft.Text(
-                    f"in {in_tokens} · out {out_tokens} tokens",
+                reasoning = usage.get("reasoning_tokens")
+                cached = usage.get("cached_tokens")
+                tokens_text = f"in {in_tokens} · out {out_tokens}"
+                if reasoning:
+                    tokens_text += f" (reasoning {reasoning})"
+                if cached:
+                    tokens_text += f" (cached {cached})"
+                tokens_text += " tokens"
+                caption_parts.append(tokens_text)
+            if message.get("stopped"):
+                caption_parts.append("stopped")
+            if finish_reason == "length":
+                caption_parts.append("truncated (length limit)")
+
+            caption = (
+                ft.Text(
+                    " · ".join(caption_parts),
                     size=11,
                     color=ft.Colors.ON_SURFACE_VARIANT,
                 )
-            elif message.get("stopped"):
-                caption = ft.Text("stopped", size=11, color=ft.Colors.ON_SURFACE_VARIANT)
+                if caption_parts
+                else None
+            )
+
+            meta_controls: list[ft.Control] = []
+            if caption is not None:
+                meta_controls.append(caption)
+            if content and not placeholder:
+                meta_controls.append(
+                    ft.IconButton(
+                        ft.Icons.CONTENT_COPY_ROUNDED,
+                        icon_size=13,
+                        tooltip="Copy message",
+                        on_click=lambda e, txt=content: methods.copy_text(txt),
+                    ),
+                )
+
+            assistant_controls: list[ft.Control] = []
+            # Reasoning sits ABOVE the answer and collapses itself the moment
+            # the answer starts, so it never pushes the reply off-screen.
+            reasoning_text = str(message.get("reasoning") or "")
+            if reasoning_text:
+                assistant_controls.append(
+                    ThinkingBlock(
+                        reasoning=reasoning_text,
+                        # Still thinking only while no answer text has arrived.
+                        streaming=bool(state.busy and not content and index == last_index),
+                        is_dark=is_dark,
+                    ),
+                )
+            assistant_controls.append(body)
+
             rows.append(
                 ft.Column(
                     spacing=4,
-                    controls=[body] + ([caption] if caption is not None else []),
-                )
+                    controls=assistant_controls
+                    + (
+                        [
+                            ft.Row(
+                                spacing=4,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                controls=meta_controls,
+                            ),
+                        ]
+                        if meta_controls
+                        else []
+                    ),
+                ),
             )
 
     if state.busy:
@@ -155,7 +188,7 @@ def ChatScreen():
                 ft.Row(
                     alignment=ft.MainAxisAlignment.CENTER,
                     controls=[ft.ProgressRing(width=16, height=16, stroke_width=2)],
-                )
+                ),
             )
 
     if not rows:
@@ -185,52 +218,33 @@ def ChatScreen():
                             on_click=lambda _: methods.start_gateway(),
                         )
                         if not state.gateway_running
-                        else ft.SizedBox(),
+                        else ft.Container(),
                     ],
                 ),
-            )
+            ),
         )
 
-    composer = ft.Container(
-        padding=12,
-        content=ft.Row(
-            spacing=8,
-            controls=[
-                ft.TextField(
-                    value=draft,
-                    hint_text="Message… (Enter sends)",
-                    min_lines=1,
-                    max_lines=5,
-                    expand=True,
-                    text_size=14,
-                    on_change=on_field_change,
-                    on_submit=on_field_submit,
-                ),
-                ft.FilledIconButton(
-                    ft.Icons.SEND,
-                    tooltip="Send",
-                    disabled=state.busy,
-                    on_click=lambda _: send(),
-                )
-                if not state.busy
-                else ft.OutlinedIconButton(
-                    ft.Icons.STOP,
-                    tooltip="Stop generating",
-                    on_click=lambda _: methods.stop_generation(),
-                ),
-            ],
-        ),
+    # Composer tool chips (ChatGPT-style composer-level toggles):
+    # "Internet" = hosted web search; "MCP" opens the per-tool switch dialog.
+    composer = Composer(
+        busy=state.busy,
+        search_enabled=state.search_enabled,
+        mcp_count=len(state.mcp_tools),
+        on_send=methods.send_message,
+        on_stop=methods.stop_generation,
+        on_toggle_search=methods.toggle_search_tool,
+        on_open_mcp=methods.open_mcp_tools,
     )
 
     return ft.Column(
         expand=True,
         spacing=0,
         controls=[
-            ft.Container(padding=ft.padding.symmetric(horizontal=16, vertical=12), content=header),
+            session_bar,
             ft.ListView(
                 expand=True,
                 spacing=12,
-                padding=ft.padding.symmetric(horizontal=16, vertical=8),
+                padding=ft.Padding.symmetric(horizontal=16, vertical=8),
                 controls=rows,
                 auto_scroll=True,
                 auto_scroll_animation=0,

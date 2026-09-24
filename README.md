@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <b>Chat with free models through your own local gateway. OpenAI compatible, no API key, runs on your device.</b>
+  <b>Chat with free models through your own local gateway. OpenAI compatible, no API key; the gateway runs on your device.</b>
 </p>
 
 ---
@@ -30,7 +30,7 @@ CI builds per-ABI APKs (`arm64-v8a`, `x86_64`) plus a universal AAB.
 | Capability | Powered by |
 |---|---|
 | Streaming chat with stop | `kani` + `flet` |
-| Local OpenAI-compatible gateway | pinned `run.py` engine from router.kiri.ng, imported in-process |
+| Local OpenAI-compatible gateway | live `run.py` engine from router.kiri.ng, imported in-process |
 | Web search tool | keyless hosted search over plain HTTP |
 | MCP servers | `kani[mcp]` + official `mcp` SDK (stdio on desktop, remote HTTP everywhere) |
 | Multi-provider | any OpenAI-compatible base URL, keys encrypted at rest |
@@ -65,7 +65,7 @@ flowchart TD
 ```
 
 - One Flet process: the gateway runs as a daemon thread inside the app
-- The gateway engine is fetched from `https://router.kiri.ng/run.py` at startup, version-pinned in `version.json` (`engine_version`, `engine_sha256`), with a bundled fallback at `src/assets/engine/run.py`
+- The gateway engine is fetched LIVE from `https://router.kiri.ng/run.py` on every startup, so upstream changes always reach the app. Nothing about the gateway is vendored or pinned in this repo — a bundled snapshot would silently shadow the live router. The only fallback is the last-known-good `engine_local.py` cache in app storage, which keeps a cold offline start working. The Server tab shows which source is active (`fetched`/`cached`)
 - State: `@ft.observable AppState`, persisted settings as JSON with encrypted provider keys
 
 ## Local Development & Testing
@@ -90,27 +90,33 @@ uv run ruff format --check src tests scripts
 uv run pytest
 ```
 
-### Refresh the bundled gateway engine
+### The gateway engine
+
+There is nothing to refresh. The app downloads `https://router.kiri.ng/run.py`
+on every startup and caches it to app storage, so the router is always the
+current upstream release. To run the router on its own without the app:
 
 ```bash
-uv run python scripts/fetch_engine.py
+curl -fsSL https://router.kiri.ng/run.py | python3
 ```
 
-Downloads `https://router.kiri.ng/run.py`, writes `src/assets/engine/run.py`,
-and records `engine_version` + `engine_sha256` in `version.json`.
+Its admin console is then at <http://127.0.0.1:8082/>.
 
 ## Privacy & Security
 
-- Chat runs through a gateway on your own machine; nothing is stored by us
+- The gateway runs on your own machine; conversation history is stored only on your device
+- Prompts are forwarded to free third-party model providers, which may log them and use them for training — we have no control over that
+- We store nothing ourselves: no accounts, no server-side chat records
 - Provider API keys are encrypted at rest (Fernet) and never logged
 - Logs redact bearer tokens, API keys and ANSI escapes before display
-- No account, no telemetry
+- No account required; mobile builds show Google AdMob ads
 
 ## Legal Disclaimer
 
 Free models are provided by third parties under their own terms and rate limits.
-Model availability changes without notice. Ads are served by Google AdMob on
-mobile builds only.
+Your messages are sent to those third parties: they may log your prompts and use
+them for training. Model availability changes without notice. Ads are served by
+Google AdMob on mobile builds only.
 
 ## Open Source Licenses
 

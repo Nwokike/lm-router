@@ -1,4 +1,8 @@
-"""Design tokens (Sherlock/voicelm naming, LM Router scale)."""
+"""Design tokens (Sherlock/voicelm naming, LM Router scale).
+
+Radii follow the house rule: 16px is THE card radius. The smaller steps exist
+only for nested/inline chrome (chips, caret rows), never for a card.
+"""
 
 from core.theme import PRIMARY
 
@@ -26,30 +30,34 @@ ICON_FEATURE = 96
 OPACITY_LIGHT = 0.12
 OPACITY_MUTED = 0.5
 ANIM_SLOW = 300
-RADIUS_MD = 12
+RADIUS_SM = 8
+RADIUS_MD = 16
 RADIUS_LG = 16
 RADIUS_XL = 26
+RADIUS_PILL = 999
 
 __all__ = [
-    "PRIMARY",
-    "SPACE_XXS",
-    "SPACE_XS",
-    "SPACE_SM",
-    "SPACE_MD",
-    "SPACE_LG",
-    "SPACE_XL",
-    "FONT_XS",
+    "ANIM_SLOW",
     "FONT_BODY_SM",
-    "FONT_MD",
     "FONT_LG",
+    "FONT_MD",
+    "FONT_XS",
     "FONT_XXL",
-    "ICON_SM",
-    "ICON_MD",
     "ICON_FEATURE",
+    "ICON_MD",
+    "ICON_SM",
     "OPACITY_LIGHT",
     "OPACITY_MUTED",
-    "ANIM_SLOW",
-    "RADIUS_MD",
+    "PRIMARY",
     "RADIUS_LG",
+    "RADIUS_MD",
+    "RADIUS_PILL",
+    "RADIUS_SM",
     "RADIUS_XL",
+    "SPACE_LG",
+    "SPACE_MD",
+    "SPACE_SM",
+    "SPACE_XL",
+    "SPACE_XS",
+    "SPACE_XXS",
 ]

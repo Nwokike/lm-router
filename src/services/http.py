@@ -17,8 +17,8 @@ BACKOFF = (0.2, 0.5, 1.0)
 
 
 class HttpService:
-    def __init__(self) -> None:
-        self._client: httpx.AsyncClient | None = None
+    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
+        self._client: httpx.AsyncClient | None = client
 
     @property
     def client(self) -> httpx.AsyncClient:

@@ -16,7 +16,7 @@ class UpdateService:
     """Checks the repository version.json manifest in the background."""
 
     @staticmethod
-    async def check_for_updates() -> dict[str, Any] | None:
+    async def check_for_updates(*, raise_on_error: bool = False) -> dict[str, Any] | None:
         try:
             async with httpx.AsyncClient(timeout=4.0, follow_redirects=True) as client:
                 resp = await client.get(constants.UPDATE_CONFIG_URL)
@@ -31,5 +31,9 @@ class UpdateService:
                         )
                         return data
         except Exception as exc:
-            LOG.info("silent update check skipped: %s", exc)
+            LOG.info("update check skipped: %s", exc)
+            if raise_on_error:
+                # Manual check: the caller tells the user it failed instead of
+                # pretending "no update" (settings audit: invisible failure).
+                raise
         return None

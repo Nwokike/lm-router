@@ -20,4 +20,7 @@ engine_local.py
 providers.json
 conversations/
 logs.json
+lm-router.log*
+tiktoken_cache/
 master.key
+smoke_debug.py

@@ -1,0 +1,278 @@
+"""Unit tests for MCP hub service, transport parameters, and schema validation."""
+
+from typing import ClassVar
+
+import httpx
+import pytest
+
+from core.settings import AppSettings, MCPServerConfig
+from services.mcp import (
+    MCPError,
+    MCPHub,
+    build_server_params,
+    classify_exception,
+    enabled_params,
+)
+
+
+def test_build_server_params_all_transports() -> None:
+    # Stdio
+    stdio_cfg = MCPServerConfig(
+        name="local",
+        transport="stdio",
+        command="npx",
+        args=["-y", "test-server"],
+    )
+    stdio_params = build_server_params(stdio_cfg, is_mobile=False)
+    assert getattr(stdio_params, "command", "") == "npx"
+
+    # Stdio on mobile is rejected
+    with pytest.raises(MCPError) as exc_info:
+        build_server_params(stdio_cfg, is_mobile=True)
+    assert exc_info.value.kind == "config"
+    assert "mobile" in str(exc_info.value).lower()
+
+    # Remote SSE
+    sse_cfg = MCPServerConfig(
+        name="remote-sse",
+        transport="sse",
+        url="http://localhost:8000/sse",
+    )
+    sse_params = build_server_params(sse_cfg)
+    assert str(getattr(sse_params, "url", "")) == "http://localhost:8000/sse"
+
+    # Remote Streamable HTTP
+    http_cfg = MCPServerConfig(
+        name="remote-http",
+        transport="streamable_http",
+        url="http://localhost:8000/mcp",
+    )
+    http_params = build_server_params(http_cfg)
+    assert str(getattr(http_params, "url", "")) == "http://localhost:8000/mcp"
+
+
+def test_enabled_params_filters_disabled() -> None:
+    s1 = MCPServerConfig(name="s1", transport="sse", url="http://s1/sse", enabled=True)
+    s2 = MCPServerConfig(name="s2", transport="sse", url="http://s2/sse", enabled=False)
+    settings = AppSettings(mcp_servers=[s1, s2])
+
+    params = enabled_params(settings)
+    assert len(params) == 1
+    assert str(getattr(params[0], "url", "")) == "http://s1/sse"
+
+
+def test_classify_exception_mappings() -> None:
+    # Direct MCPError
+    assert classify_exception(MCPError("custom", "test")).kind == "custom"
+
+    # Network / Timeout
+    assert classify_exception(httpx.ConnectError("refused")).kind == "unreachable"
+    assert classify_exception(httpx.ReadTimeout("timed out")).kind == "unreachable"
+
+    # Schema error
+    # A tool schema problem is now detected locally (no jsonschema dep).
+    from services.mcp import _schema_problem
+
+    assert _schema_problem({"type": "nonsense"})[0] is False
+    assert _schema_problem({"type": "object", "properties": {}})[0] is True
+    assert _schema_problem(None)[0] is False
+
+    # Auth
+    assert classify_exception(Exception("HTTP 401 Unauthorized")).kind == "auth"
+    assert classify_exception(Exception("403 Forbidden")).kind == "auth"
+
+    # Protocol
+    proto_err = Exception("Unsupported protocol version 2024-01-01")
+    assert classify_exception(proto_err).kind == "protocol"
+    assert classify_exception(Exception("RPC error -32601 Method not found")).kind == "protocol"
+
+    # TaskGroup ExceptionGroups (anyio) must unwrap to the real cause
+    group = ExceptionGroup("taskgroup", [httpx.ConnectError("refused")])
+    assert classify_exception(group).kind == "unreachable"
+
+    # Generic tool error
+    assert classify_exception(Exception("Calculation error")).kind == "tool"
+
+
+@pytest.mark.anyio
+async def test_hub_test_schema_validation(monkeypatch) -> None:
+    class FakeToolValid:
+        name = "valid_tool"
+        desc = "Tool with a valid schema"
+        json_schema: ClassVar[dict] = {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+        }
+
+    class FakeToolInvalid:
+        name = "broken_tool"
+        desc = "Tool with an invalid schema"
+        json_schema: ClassVar[dict] = {"type": "not-a-valid-type"}
+
+    class FakeContext:
+        async def __aenter__(self):
+            return [FakeToolValid(), FakeToolInvalid()]
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    monkeypatch.setattr(
+        "services.mcp.tools_from_mcp_servers",
+        lambda params, **kw: FakeContext(),
+    )
+
+    hub = MCPHub(AppSettings())
+    server = MCPServerConfig(name="test", transport="sse", url="http://test/sse")
+    results = await hub.test(server)
+
+    assert len(results) == 2
+    valid_res = next(r for r in results if r["name"] == "valid_tool")
+    assert valid_res["schema_valid"] is True
+    assert valid_res["schema_error"] is None
+
+    broken_res = next(r for r in results if r["name"] == "broken_tool")
+    assert broken_res["schema_valid"] is False
+    assert broken_res["schema_error"] is not None
+
+
+@pytest.mark.anyio
+async def test_hub_apply_passes_blocked_tools(monkeypatch) -> None:
+    passed_blocked: list = []
+
+    class FakeContext:
+        async def __aenter__(self):
+            return []
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    def mock_tools_from_mcp_servers(params, blocked_tools=None, **kwargs):
+        if blocked_tools:
+            passed_blocked.extend(blocked_tools)
+        return FakeContext()
+
+    monkeypatch.setattr("services.mcp.tools_from_mcp_servers", mock_tools_from_mcp_servers)
+
+    server = MCPServerConfig(
+        name="github",
+        transport="sse",
+        url="http://github/sse",
+        disabled_tools=["delete_repo", "push_file"],
+    )
+    settings = AppSettings(mcp_servers=[server])
+    hub = MCPHub(settings)
+
+    await hub.apply([build_server_params(server)])
+    assert "github.delete_repo" in passed_blocked
+    assert "github.push_file" in passed_blocked
+
+
+@pytest.mark.anyio
+async def test_a_stalled_server_cannot_wedge_the_portal(monkeypatch) -> None:
+    """A server that never answers must not park the MCP owner task.
+
+    The SDK defaults are 300s for SSE reads and unbounded for a wedged stdio
+    child; `serve()` only checks _stop/_reconnect BETWEEN connects, so without
+    a bound, Quit and "remove server" hung and the agent portal never recovered.
+    """
+    import asyncio
+
+    from services import mcp as mcp_mod
+
+    class _HangingContext:
+        async def __aenter__(self):
+            await asyncio.sleep(3600)  # never returns
+            return []
+
+        async def __aexit__(self, *exc):
+            return None
+
+    monkeypatch.setattr(mcp_mod, "tools_from_mcp_servers", lambda *a, **k: _HangingContext())
+    monkeypatch.setattr(mcp_mod, "CONNECT_TIMEOUT", 0.2)
+
+    settings = AppSettings(
+        mcp_servers=[
+            MCPServerConfig(
+                name="stuck",
+                transport="streamable_http",
+                url="https://never-answers.invalid/mcp",
+            ),
+        ],
+    )
+    statuses: list = []
+    hub = MCPHub(settings, on_status=lambda names, error: statuses.append((names, error)))
+
+    await hub._connect()
+
+    # Bounded, and the hub is left in a clean, usable state.
+    assert hub.tools == []
+    assert hub.names == []
+    assert hub._context is None
+
+
+def test_stdio_servers_are_refused_on_mobile() -> None:
+    """A phone has no subprocess model, so `uvx`/`npx` servers can never run.
+
+    The guard existed but every call site used the default `is_mobile=False`,
+    so it never fired and the app would hang trying to spawn a process.
+    """
+    from services.mcp import build_server_params, enabled_params
+
+    stdio = MCPServerConfig(name="s", transport="stdio", command="uvx", args=["some-mcp"])
+
+    # Desktop: fine.
+    assert build_server_params(stdio, is_mobile=False) is not None
+
+    # Mobile: refused with an actionable message.
+    with pytest.raises(MCPError) as exc:
+        build_server_params(stdio, is_mobile=True)
+    assert "mobile" in str(exc.value).lower()
+
+    # And the bulk path refuses it too, rather than silently spawning.
+    settings = AppSettings(mcp_servers=[stdio])
+    with pytest.raises(MCPError):
+        enabled_params(settings, is_mobile=True)
+
+    # Remote transports still work on mobile.
+    remote = MCPServerConfig(name="r", transport="streamable_http", url="https://x.dev/mcp")
+    assert build_server_params(remote, is_mobile=True) is not None
+
+
+def test_missing_stdio_launcher_is_reported_actionably(monkeypatch) -> None:
+    """A desktop user without `uv` must get a fix, not a bare ENOENT.
+
+    Spawning a missing executable used to surface as FileNotFoundError deep
+    inside the MCP task group, which the user saw as "Server unreachable".
+    """
+    from services.mcp import build_server_params
+
+    monkeypatch.setattr("services.mcp.shutil.which", lambda _cmd: None)
+    server = MCPServerConfig(name="docs", transport="stdio", command="uvx", args=["mcp-docs"])
+
+    with pytest.raises(MCPError) as exc:
+        build_server_params(server, is_mobile=False)
+    message = str(exc.value)
+    assert "uvx" in message
+    assert "not found" in message.lower()
+    # It must say what to do, not just that it broke.
+    assert "install" in message.lower() or "PATH" in message
+
+
+def test_present_stdio_launcher_is_accepted(monkeypatch) -> None:
+    from services.mcp import build_server_params
+
+    monkeypatch.setattr("services.mcp.shutil.which", lambda _cmd: "/usr/bin/uvx")
+    server = MCPServerConfig(name="docs", transport="stdio", command="uvx", args=[])
+    assert build_server_params(server) is not None
+
+
+def test_explicit_path_is_not_path_resolved(monkeypatch) -> None:
+    """A full path or script is used verbatim; we do not second-guess it."""
+    from services.mcp import build_server_params
+
+    def _boom(_cmd):
+        raise AssertionError("should not resolve an explicit path")
+
+    monkeypatch.setattr("services.mcp.shutil.which", _boom)
+    server = MCPServerConfig(name="s", transport="stdio", command="/opt/bin/my-server", args=[])
+    assert build_server_params(server) is not None

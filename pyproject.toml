@@ -1,15 +1,22 @@
 [project]
 name = "lm-router"
 version = "0.1.0"
-description = "LM Router — chat with free models through your own local gateway. OpenAI compatible, no API key, runs on your device."
+description = "LM Router — chat with free models through your own local gateway. OpenAI compatible, no API key; the gateway runs on your device and messages go to third-party providers."
 readme = "README.md"
 authors = [
     { name = "Nwokike", email = "onyeka@kiri.ng" }
 ]
-requires-python = ">=3.14"
+# Pin the interpreter band: a flet-cli/python-build manifest bump must never
+# silently switch the bundled runtime to 3.15 (bump deliberately after testing).
+requires-python = ">=3.14,<3.15"
 dependencies = [
-    "flet>=1.0.0",
-    "flet-ads>=1.0.0",
+    # The only three. Everything else the app needs is already a
+    # sub-dependency of these, and importing one directly is not free:
+    #   httpx, httpx-sse, jsonschema  <- mcp (via kani[mcp])
+    #   pydantic, tiktoken            <- kani
+    #   cryptography                  <- pyjwt[crypto], via mcp
+    "flet>=1.0.1",
+    "flet-ads>=1.0.1",
     "kani[mcp,openai]>=1.10.0",
 ]
 
@@ -33,13 +40,17 @@ org = "ng.kiri"
 product = "LM Router"
 company = "Kiri Research Labs"
 build_number = 1
+# Brand background + adaptive icon fill. Note: src/assets/icon.svg is NOT
+# consumed by flet-cli (it filters .svg as incompatible); icon.png is the
+# build source of truth — keep the svg only as a design master.
 icon_background = "#0a0a0a"
 
 [tool.flet.app]
 path = "src"
 
-[tool.flet.app.boot_screen]
-startup_message = "Starting LM Router..."
+# [tool.flet.app.boot_screen] startup_message was DEAD config: flet-cli
+# 1.0.0's _resolve_boot_screen() only reads [tool.flet.boot_screen] / per-
+# platform overrides, so it silently did nothing. Do not restore it.
 
 [tool.flet.splash]
 color = "#ffffff"
@@ -51,12 +62,22 @@ host = "app"
 
 [tool.flet.android]
 bundle_id = "ng.kiri.lmrouter"
-target_arch = ["arm64-v8a", "x86_64"]
+# No target_arch restriction: CI builds with --split-per-abi, so every
+# Python-supported ABI ships as its own small APK (never one fat APK).
 adaptive_icon_background = "#0a0a0a"
 
 [tool.flet.android.meta_data]
-# Google sample App ID for development (matches USE_TEST_IDS=True in ads.py).
-# Swap to the production AdMob App ID at Play Store release.
+# ⚠️ GOOGLE TEST AdMob ID — PRODUCTION IDs NOT SET YET ⚠️
+#
+# We are deliberately shipping with Google's public TEST ad units while the
+# Play Store listing is pending. Two consequences you must not forget:
+#   1. These test units serve test ads and pay nothing.
+#   2. Before the REAL v1.0.0 Play Store release, swap this App ID and the
+#      banner/interstitial unit IDs in src/core/constants.py to production,
+#      then restore the hard-fail branch in
+#      .github/workflows/build-all.yml (the "AdMob release-ID guard" step,
+#      currently relaxed to a warning on purpose).
+# Search for 3940256099942544 in this file and src/core/constants.py.
 "com.google.android.gms.ads.APPLICATION_ID" = "ca-app-pub-3940256099942544~3347511713"
 
 [tool.flet.android.permission]
@@ -79,14 +100,10 @@ key_alias = "upload"
 "org.gradle.jvmargs" = "-Xmx4G -XX:MaxMetaspaceSize=1G -XX:ReservedCodeCacheSize=512m -XX:+HeapDumpOnOutOfMemoryError"
 
 # Ship runtime code only (app_files implies cleanup.app, verified in flet_cli).
+# Globs run INSIDE the packaged app dir (src/), so repo-root dirs (tests/ etc.)
+# are already outside the package — no app_files entries needed.
 [tool.flet.cleanup]
 app = true
-app_files = [
-    "tests",
-    "scripts",
-    "tools",
-    "screenshots",
-]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
@@ -95,14 +112,15 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py314"
-# The bundled gateway engine is a byte-pinned external artifact (sha recorded
-# in version.json). Never lint or format it: reformatting breaks the pin.
-extend-exclude = ["src/assets/engine"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "S"]
+# COM812 deliberately omitted: ruff's formatter already enforces trailing
+# commas on split lines, and the rule conflicts with it (ruff warning).
+select = ["E", "F", "W", "I", "UP", "S", "RUF", "SIM105"]
 
 [tool.ruff.lint.per-file-ignores]
 # Tests assert by design; stub excepts are intentional; dummy secrets appear
 # in security-test fixtures on purpose.
 "tests/*" = ["S101", "S105", "S110", "S112"]
+# Prints ARE the CLI interface for scripts (progress + errors to stdout).
+"scripts/*" = ["T201"]

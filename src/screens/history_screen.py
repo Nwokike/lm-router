@@ -1,4 +1,4 @@
-"""History screen: saved conversations (open / delete / clear)."""
+"""History screen: saved conversations with search, relative timestamps, and export."""
 
 import flet as ft
 
@@ -12,9 +12,21 @@ from state.controller_ctx import ControllerMethodsCtx
 def HistoryScreen():
     state = ft.use_context(AppStateCtx)
     methods = ft.use_context(ControllerMethodsCtx)
+    query, set_query = ft.use_state("")
 
-    rows: list = []
-    for conversation in state.conversations:
+    # Filter conversations by search term
+    q = query.strip().lower()
+    filtered_conversations = [
+        c for c in state.conversations if not q or q in c.get("title", "").lower()
+    ]
+
+    rows: list[ft.Control] = []
+    for conversation in filtered_conversations:
+        cid = conversation["id"]
+        rel = conversation.get("relative", "")
+        updated = conversation.get("updated", "")
+        time_display = f"{rel} · {updated}" if rel and updated else (rel or updated)
+
         rows.append(
             ft.Container(
                 padding=12,
@@ -27,6 +39,7 @@ def HistoryScreen():
                         ft.Column(
                             spacing=2,
                             tight=True,
+                            expand=True,
                             controls=[
                                 ft.Text(
                                     conversation.get("title", "Untitled"),
@@ -35,7 +48,7 @@ def HistoryScreen():
                                     overflow=ft.TextOverflow.ELLIPSIS,
                                 ),
                                 ft.Text(
-                                    conversation.get("updated", ""),
+                                    time_display,
                                     size=11,
                                     color=ft.Colors.ON_SURFACE_VARIANT,
                                 ),
@@ -46,26 +59,33 @@ def HistoryScreen():
                             controls=[
                                 ft.TextButton(
                                     "Open",
-                                    on_click=lambda e, cid=conversation["id"]: (
-                                        methods.open_conversation(cid)
-                                    ),
+                                    on_click=lambda e, c=cid: methods.open_conversation(c),
+                                ),
+                                ft.IconButton(
+                                    ft.Icons.IOS_SHARE,
+                                    icon_size=18,
+                                    tooltip="Export Markdown",
+                                    on_click=lambda e, c=cid: methods.export_conversation(c),
                                 ),
                                 ft.IconButton(
                                     ft.Icons.DELETE_OUTLINE,
                                     icon_size=18,
                                     tooltip="Delete",
-                                    on_click=lambda e, cid=conversation["id"]: (
-                                        methods.delete_conversation(cid)
-                                    ),
+                                    on_click=lambda e, c=cid: methods.delete_conversation(c),
                                 ),
                             ],
                         ),
                     ],
                 ),
-            )
+            ),
         )
 
     if not rows:
+        empty_msg = (
+            f"No conversations matching '{query}'."
+            if query.strip()
+            else "No saved conversations yet."
+        )
         rows.append(
             ft.Container(
                 alignment=ft.Alignment.CENTER,
@@ -80,21 +100,21 @@ def HistoryScreen():
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
                         ft.Text(
-                            "No saved conversations yet.",
+                            empty_msg,
                             size=14,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
                     ],
                 ),
-            )
+            ),
         )
 
     return ft.Container(
         expand=True,
-        scroll=ft.ScrollMode.AUTO,
         padding=16,
         content=ft.Column(
             spacing=12,
+            scroll=ft.ScrollMode.AUTO,
             controls=[
                 ft.Row(
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -105,7 +125,8 @@ def HistoryScreen():
                             spacing=4,
                             controls=[
                                 ft.TextButton(
-                                    "New chat", on_click=lambda _: methods.new_conversation()
+                                    "New chat",
+                                    on_click=lambda _: methods.new_conversation(),
                                 ),
                                 ft.TextButton(
                                     "Clear all",
@@ -115,6 +136,13 @@ def HistoryScreen():
                             ],
                         ),
                     ],
+                ),
+                ft.TextField(
+                    value=query,
+                    hint_text="Search conversations…",
+                    prefix_icon=ft.Icons.SEARCH,
+                    text_size=13,
+                    on_change=lambda e: set_query(str(e.control.value or "")),
                 ),
                 *rows,
                 build_banner_ad(),

@@ -3,6 +3,12 @@ defaults, containers assigned in __init__ so each instance owns them)."""
 
 import flet as ft
 
+# Screens historically imported the eligibility predicate from here; the rule
+# itself now lives in core.catalog next to the endpoint vocabulary.
+from core.catalog import is_chat_eligible
+
+__all__ = ["AppState", "AppStateCtx", "is_chat_eligible", "state"]
+
 
 @ft.observable
 class AppState:
@@ -20,14 +26,26 @@ class AppState:
     gateway_version: str = ""
     gateway_uptime: int = 0
     gateway_source: str = ""  # e.g. "fetched 1.0.0" / "bundled 1.0.0"
+    gateway_lan_ip: str = ""
+    gateway_lan_url: str = ""
 
     # catalog + chat
     model: str = ""
     busy: bool = False
+    search_enabled: bool = True
+    context_used_tokens: int = 0
+    session_total_tokens: int = 0
     ad_can_request: bool = False
     sent_count: int = 0
     update_info: dict | None = None
     log_version: int = 0  # bumped when the log ring changes (re-renders Server screen)
+
+    # Global error/notice banner (dismissed by the user; never swallowed)
+    notice: str = ""
+    notice_id: int = 0  # bumped with notice so identical texts re-render
+
+    # Settings: server-ids with an in-flight "Test" (spinner + re-click guard)
+    mcp_testing: frozenset = frozenset()
 
     def __init__(self) -> None:
         self.gateway_base_url = f"http://127.0.0.1:{8082}/v1"
@@ -37,6 +55,11 @@ class AppState:
         self.active_conversation: str = ""
         self.mcp_tools: list[str] = []
         self.mcp_test_results: dict = {}
+        # Per-model rate-limit hints from GET /account-limits, keyed by model
+        # id. Drives the "this model is capped" affordances in the UI.
+        self.rate_hints: dict = {}
+        # Aggregate gateway counters from GET /status (no model ids upstream).
+        self.gateway_counts: dict = {}
 
     @property
     def active_provider(self) -> str:

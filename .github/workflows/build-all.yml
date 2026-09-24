@@ -43,15 +43,20 @@ jobs:
         run: uv run ruff format --check src/ tests/ scripts/
       - name: Tests
         run: uv run pytest -q
-      - name: AdMob release-ID guard
+      # ⚠️ TEMPORARILY RELAXED — RESTORE BEFORE THE REAL v1.0.0 RELEASE ⚠️
+      #
+      # This used to HARD FAIL any `v*` tag while Google's test AdMob IDs
+      # were in place. It is now a warning only, because we are shipping test
+      # ads while the Play Store listing is still pending.
+      #
+      # TODO(owner): before the real Play Store release, swap the App ID and
+      # unit IDs in pyproject.toml + src/core/constants.py to production, then
+      # restore the `exit 1` branch below. Do not ship a production build with
+      # test ad IDs — you would not be paid, and the listing would be wrong.
+      - name: AdMob release-ID guard (RELAXED - see comment)
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            if grep -q "3940256099942544" pyproject.toml src/core/constants.py; then
-              echo "::error::Google test AdMob IDs still present. Swap in prod App ID and unit IDs before tagging a release."
-              exit 1
-            fi
-          elif grep -q "3940256099942544" pyproject.toml src/core/constants.py; then
-            echo "::warning::Test AdMob IDs in use (expected for PR builds)"
+          if grep -q "3940256099942544" pyproject.toml src/core/constants.py; then
+            echo "::warning title=AdMob IDs::Google TEST AdMob IDs are in use. This is intentional for now; production IDs must be swapped in before the real v1.0.0 Play Store release."
           fi
           exit 0
 

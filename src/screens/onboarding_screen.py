@@ -10,10 +10,15 @@ import flet as ft
 from flet import Control
 
 from core import theme, tokens
+from core.state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
 
 _PRIVACY_URL = "https://kiri.ng/privacy"
 _TERMS_URL = "https://kiri.ng/terms"
+
+# Strong references so haptic asyncio tasks are never garbage-collected
+# mid-flight (RUF006): fire-and-forget tasks must outlive their frame.
+_background_tasks: set[asyncio.Task] = set()
 
 _SLIDES = [
     {
@@ -38,10 +43,11 @@ _SLIDES = [
     {
         "icon": ft.Icons.PRIVACY_TIP_ROUNDED,
         "color": theme.PRIMARY,
-        "title": "Private by\ndesign",
+        "title": "Your data,\nyour device",
         "body": (
-            "Everything runs on your device: the gateway, your chat history "
-            "and your provider keys, which are encrypted at rest."
+            "Your chat history and encrypted provider keys stay on your device. "
+            "Prompts are sent to free third-party model providers, which may "
+            "log them — see our Privacy Policy."
         ),
     },
 ]
@@ -99,6 +105,10 @@ def _build_slide(s: dict) -> ft.Column:
 @ft.component
 def OnboardingScreen() -> Control:
     controller = ft.use_context(ControllerMethodsCtx)
+    # Subscribe this screen too: like Sherlock/DDGS/ktv-player, flip the
+    # observable HERE (in the tap) so the context-owned shell re-renders;
+    # the controller then persists it.
+    app_state = ft.use_context(AppStateCtx)
     page_idx, set_page_idx = ft.use_state(0)
     agreed, set_agreed = ft.use_state(False)
     show_hint, set_show_hint = ft.use_state(False)
@@ -107,9 +117,16 @@ def OnboardingScreen() -> Control:
 
     def _haptic() -> None:
         with contextlib.suppress(Exception):
-            asyncio.create_task(ft.HapticFeedback().light_impact())
+            task = asyncio.create_task(ft.HapticFeedback().light_impact())
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
 
     def _finish() -> None:
+        # Flip the observable HERE (in the tap) so this screen's context
+        # notifies the shell to re-render, then the controller persists it
+        # and forces page.update (ffmpeg pattern).
+        app_state.onboarding_done = True
+        app_state.terms_accepted = True
         controller.finish_onboarding()
 
     def _on_next(e: object = None) -> None:
@@ -161,7 +178,7 @@ def OnboardingScreen() -> Control:
             ft.GestureDetector(
                 content=dot,
                 on_tap=lambda e, idx=i: _on_dot_click(idx),
-            )
+            ),
         )
 
     terms_row = ft.Row(
@@ -249,7 +266,7 @@ def OnboardingScreen() -> Control:
                                 alignment=ft.MainAxisAlignment.CENTER,
                                 spacing=tokens.SPACE_SM,
                             ),
-                            terms_row if is_last else ft.SizedBox(),
+                            terms_row if is_last else ft.Container(),
                             hint,
                             ft.FilledButton(
                                 content=ft.Text(
@@ -266,7 +283,7 @@ def OnboardingScreen() -> Control:
                                 width=220,
                                 height=52,
                                 style=ft.ButtonStyle(
-                                    shape=ft.RoundedRectangleBorder(radius=tokens.RADIUS_XL)
+                                    shape=ft.RoundedRectangleBorder(radius=tokens.RADIUS_XL),
                                 ),
                             ),
                         ],

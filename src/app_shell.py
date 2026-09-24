@@ -38,7 +38,37 @@ def AppShell():
             ),
         )
         if state.offline
-        else ft.SizedBox(height=0)
+        else ft.Container(height=0)
+    )
+
+    notice_banner = (
+        ft.Container(
+            padding=ft.Padding(16, 8, 16, 8),
+            bgcolor=ft.Colors.with_opacity(0.15, ft.Colors.ERROR),
+            content=ft.Row(
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Icon(ft.Icons.ERROR_OUTLINE_ROUNDED, size=16, color=ft.Colors.ERROR),
+                    ft.Text(
+                        state.notice,
+                        size=12,
+                        color=ft.Colors.ERROR,
+                        max_lines=3,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                        expand=True,
+                    ),
+                    ft.IconButton(
+                        ft.Icons.CLOSE,
+                        icon_size=16,
+                        tooltip="Dismiss",
+                        on_click=lambda _: methods.dismiss_notice(),
+                    ),
+                ],
+            ),
+        )
+        if state.notice
+        else ft.Container(height=0)
     )
 
     views = [
@@ -54,7 +84,7 @@ def AppShell():
                             icon_size=22,
                             tooltip="History",
                             on_click=lambda _: methods.set_tab(3),
-                        )
+                        ),
                     ],
                 ),
                 ChatScreen(key=ft.ValueKey("view-chat")),
@@ -64,7 +94,7 @@ def AppShell():
             expand=True,
             spacing=0,
             controls=[
-                AppHeader(title="Server"),
+                AppHeader(title="Server", show_quit=True),
                 ServerScreen(key=ft.ValueKey("view-server")),
             ],
         ),
@@ -72,7 +102,7 @@ def AppShell():
             expand=True,
             spacing=0,
             controls=[
-                AppHeader(title="Settings"),
+                AppHeader(title="Settings", show_quit=True),
                 SettingsScreen(key=ft.ValueKey("view-settings")),
             ],
         ),
@@ -80,7 +110,7 @@ def AppShell():
             expand=True,
             spacing=0,
             controls=[
-                AppHeader(title="History"),
+                AppHeader(title="History", show_quit=True),
                 HistoryScreen(key=ft.ValueKey("view-history")),
             ],
         ),
@@ -92,10 +122,11 @@ def AppShell():
         spacing=0,
         controls=[
             offline_banner,
+            notice_banner,
             ft.Container(expand=True, content=views[index]),
             ft.NavigationBar(
                 selected_index=index if index < 3 else 0,
-                on_change=lambda e: methods.set_tab(int(e.data)),
+                on_change=lambda e: methods.set_tab(int(e.control.selected_index)),
                 destinations=[
                     ft.NavigationBarDestination(
                         icon=ft.Icons.CHAT_BUBBLE_OUTLINE,

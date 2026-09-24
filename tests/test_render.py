@@ -8,18 +8,18 @@ from later tests.
 
 from __future__ import annotations
 
+import contextlib
+
 import flet as ft
 import pytest
-from flet.components.component import Renderer
+from flet.components.component import Component, Renderer
 from flet.controls.context import _context_page
 
 
 class _FakeServices(list):
     def register_service(self, svc):
-        try:
+        with contextlib.suppress(Exception):
             list.append(self, svc)
-        except Exception:
-            pass
         return svc
 
     def unregister_services(self):
@@ -68,17 +68,81 @@ def _renderer_page():
 
 
 def _render(component_fn):
-    return Renderer().render(component_fn)
+    """Render a component AND execute its body, recursively.
+
+    `Renderer().render()` only wraps the callable; the body first runs during
+    `before_update()`. Calling render() alone let screens that raise on their
+    first constructed control (e.g. Container(scroll=...)) report as passing.
+
+    `before_update()` on a Component only renders ITS own body. Nested
+    components returned by it (Composer, SessionBar, ThinkingBlock...) build
+    later, during the real page patch — which is how `Chip(avatar=...)` (not
+    a flet 1.0 property) reached production unnoticed. `_deep_update` walks
+    the whole tree so nested components are executed here too.
+    """
+    component = Renderer().render(component_fn)
+    _deep_update(component)
+    return component
+
+
+def _deep_update(control, depth: int = 0) -> None:
+    """Execute before_update on `control` and every nested Component."""
+    if control is None or depth > 30:
+        return
+    if isinstance(control, Component):
+        control.before_update()
+        for child in _flatten(getattr(control, "_b", None)):
+            _deep_update(child, depth + 1)
+        return
+    # flet_ads controls resolve self.page by walking a real _parent chain to a
+    # live Page; the synthetic test tree has none, so they raise here even
+    # though they are fine in the app. Skip them rather than fake a parent.
+    if type(control).__module__.startswith("flet_ads"):
+        return
+    # Plain controls: run their own validators, then recurse.
+    control.before_update()
+    for child in _children(control):
+        _deep_update(child, depth + 1)
+
+
+def _flatten(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [v for v in value if v is not None]
+    return [value]
+
+
+def _children(control):
+    """Best-effort child extraction across flet's control shapes."""
+    out = []
+    for attr in ("controls", "content", "leading", "trailing", "items", "views"):
+        value = getattr(control, attr, None)
+        if isinstance(value, list):
+            out.extend(v for v in value if v is not None)
+        elif value is not None and hasattr(value, "__dict__"):
+            out.append(value)
+    return out
 
 
 def test_all_screens_render(_renderer_page):
     from app_shell import AppShell
+    from core.state import state
     from screens.chat_screen import ChatScreen
     from screens.history_screen import HistoryScreen
     from screens.onboarding_screen import OnboardingScreen
     from screens.server_screen import ServerScreen
     from screens.settings_screen import SettingsScreen
     from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    # Exercise the populated branches too, not only the empty states.
+    state.onboarding_done = True
+    state.gateway_running = True
+    state.gateway_lan_url = "http://192.168.1.5:8082/v1"
+    state.messages = [{"role": "user", "content": "hello"}]
+    state.conversations = [
+        {"id": "abc", "title": "Test chat", "relative": "now", "updated": "2026-01-01"}
+    ]
 
     roots = []
     try:
@@ -90,15 +154,13 @@ def test_all_screens_render(_renderer_page):
             HistoryScreen,
         ):
             roots.append(_render(component))
-        shell_root = Renderer().render(
-            lambda: ControllerMethodsCtx(ControllerMethods(), lambda: AppShell())
+        shell_root = _render(
+            lambda: ControllerMethodsCtx(ControllerMethods(), lambda: AppShell()),
         )
         roots.append(shell_root)
         assert shell_root is not None
     finally:
         for root in roots:
-            try:
+            with contextlib.suppress(Exception):
                 root._detach_observable_subscriptions()
                 root._state.mounted = False
-            except Exception:
-                pass

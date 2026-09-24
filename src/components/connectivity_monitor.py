@@ -25,7 +25,8 @@ async def _http_online() -> bool:
         req = urllib.request.Request(_CHECK_URL, method="HEAD")
         resp = await asyncio.to_thread(urllib.request.urlopen, req, timeout=_CHECK_TIMEOUT)
         return resp.status == 204
-    except Exception:
+    except Exception as exc:
+        LOG.debug("connectivity probe failed: %s", exc)
         return False
 
 

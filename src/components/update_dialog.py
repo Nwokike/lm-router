@@ -2,7 +2,7 @@
 
 import flet as ft
 
-from core import constants, tokens
+from core import constants, theme, tokens
 from core.logging import LOG
 
 _RELEASE_NOTES_FALLBACK = "See the GitHub releases page for the change log."
@@ -51,13 +51,11 @@ def build_update_dialog(
             content=ft.Column(
                 scroll=ft.ScrollMode.AUTO,
                 controls=[
-                    ft.Markdown(
+                    theme.markdown(
                         notes,
-                        selectable=True,
-                        extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
-                        code_theme=ft.MarkdownCodeTheme.MONOKAI,
+                        is_dark=theme.is_dark_mode(page, "system"),
                         on_tap_link=lambda e: _launch(e.data),
-                    )
+                    ),
                 ],
             ),
         ),

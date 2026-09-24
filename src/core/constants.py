@@ -7,11 +7,12 @@ BUILD_NUMBER = 1  # synced with version.json build_number
 ENGINE_URL = "https://router.kiri.ng/run.py"
 GITHUB_RELEASE_URL = "https://github.com/Nwokike/lm-router/releases/latest"
 UPDATE_CONFIG_URL = "https://raw.githubusercontent.com/Nwokike/lm-router/main/version.json"
-PLAYSTORE_URL = ""
+# Must match [tool.flet.android] bundle_id (ng.kiri.lmrouter) or the Play
+# button lands on the wrong/nonexistent listing.
+PLAYSTORE_URL = "https://play.google.com/store/apps/details?id=ng.kiri.lmrouter"
 DEFAULT_GATEWAY_PORT = 8082
 
 SETTINGS_FILE = "app_settings.json"
-MASTER_KEY_FILE = "master.key"
 CONVERSATIONS_DIR = "conversations"
 
 LOG_RING_SIZE = 500

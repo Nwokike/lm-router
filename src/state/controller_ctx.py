@@ -21,13 +21,19 @@ class ControllerMethods:
     set_tab: Callable[[int], None] = _noop
     set_theme: Callable[[str], None] = _noop
     dismiss_update: Callable[[], None] = _noop
+    dismiss_notice: Callable[[], None] = _noop
     # chat
     send_message: Callable[[str], None] = _noop
     stop_generation: Callable[[], None] = _noop
     set_model: Callable[[str], None] = _noop
+    toggle_search_tool: Callable[[], None] = _noop
+    open_mcp_tools: Callable[[], None] = _noop
     new_conversation: Callable[[], None] = _noop
     open_conversation: Callable[[str], None] = _noop
     delete_conversation: Callable[[str], None] = _noop
+    copy_text: Callable[[str], None] = _noop
+    copy_logs: Callable[[], None] = _noop
+    export_conversation: Callable[[str], None] = _noop
     # gateway
     start_gateway: Callable[[], None] = _noop
     stop_gateway: Callable[[], None] = _noop
@@ -41,10 +47,12 @@ class ControllerMethods:
     add_mcp_server: Callable[[dict], None] = _noop
     remove_mcp_server: Callable[[str], None] = _noop
     toggle_mcp_server: Callable[[str], None] = _noop
+    toggle_mcp_tool: Callable[[str, str], None] = _noop
     test_mcp_server: Callable[[str, object], None] = _noop  # (server_id, done_callback)
     clear_history: Callable[[], None] = _noop
     check_update: Callable[[], None] = _noop
     open_update_dialog: Callable[[], None] = _noop
+    open_about: Callable[[], None] = _noop
     quit_app: Callable[[], None] = _noop
     finish_onboarding: Callable[[], None] = _noop
     open_url: Callable[[str], None] = _noop

@@ -6,11 +6,13 @@ stripped so tool output cannot hijack the Server screen.
 """
 
 import logging
+import logging.handlers
 import re
 import time
 from collections import deque
+from pathlib import Path
 
-from . import constants
+from . import constants, storage
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 
@@ -52,7 +54,7 @@ class RingHandler(logging.Handler):
                 "ts": time.strftime("%H:%M:%S", time.localtime(record.created)),
                 "level": record.levelname,
                 "msg": message,
-            }
+            },
         )
         if on_record is not None:
             try:
@@ -61,12 +63,55 @@ class RingHandler(logging.Handler):
                 _ = exc
 
 
+def log_path() -> Path:
+    return storage.cache_dir() / "lm-router.log"
+
+
+class RedactFileHandler(logging.handlers.RotatingFileHandler):
+    """Always-on rotating file log — GUI users may never see the terminal."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            # Format FIRST (Formatter needs a LogRecord), redact the text after.
+            self.stream.write(redact(self.format(record)) + self.terminator)
+            self.flush()
+        except Exception:
+            self.handleError(record)
+
+
+def tail(lines: int = 200) -> str:
+    try:
+        with log_path().open("r", encoding="utf-8", errors="replace") as handle:
+            return "".join(handle.readlines()[-lines:])
+    except OSError:
+        return "(no log file yet)"
+
+
 def get_logger(name: str) -> logging.Logger:
     global _handler_installed
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
     if not _handler_installed:
         logger.addHandler(RingHandler())
+        try:
+            file_handler = RedactFileHandler(
+                log_path(),
+                maxBytes=512_000,
+                backupCount=2,
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(
+                logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"),
+            )
+            logger.addHandler(file_handler)
+        except OSError as exc:
+            _ring.append(
+                {
+                    "ts": time.strftime("%H:%M:%S"),
+                    "level": "WARNING",
+                    "msg": f"file log unavailable: {exc}",
+                },
+            )
         _handler_installed = True
     return logger
 

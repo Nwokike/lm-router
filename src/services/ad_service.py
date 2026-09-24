@@ -8,6 +8,7 @@ gate and failure is logged.
 """
 
 import asyncio
+import contextlib
 
 import flet as ft
 
@@ -43,7 +44,8 @@ class AdService:
     def _is_mobile(self) -> bool:
         try:
             return self.page.platform.is_mobile()
-        except Exception:
+        except Exception as exc:
+            LOG.debug("platform query failed: %s", exc)
             return False
 
     async def gather_consent(self) -> None:
@@ -112,7 +114,8 @@ class AdService:
                 unit_id=self.interstitial_id,
                 on_load=lambda e: LOG.info("ads: interstitial loaded"),
                 on_error=lambda e: LOG.warning(
-                    "ads: interstitial load error: %s", getattr(e, "data", e)
+                    "ads: interstitial load error: %s",
+                    getattr(e, "data", e),
                 ),
                 on_close=self._handle_close,
             )
@@ -164,7 +167,8 @@ class AdService:
                 unit_id=self.interstitial_id,
                 on_load=lambda e: self.page.run_task(_show, e),
                 on_error=lambda e: LOG.warning(
-                    "ads: interstitial load error: %s", getattr(e, "data", e)
+                    "ads: interstitial load error: %s",
+                    getattr(e, "data", e),
                 ),
                 on_close=self._handle_close,
             )
@@ -186,7 +190,5 @@ class AdService:
 
 
 def _release_service(services: list, item) -> None:
-    try:
+    with contextlib.suppress(ValueError):
         services.remove(item)
-    except ValueError:
-        pass
