@@ -37,10 +37,67 @@ jobs:
           python-version: '3.14'
       - name: Install dependencies (incl. dev group)
         run: uv sync
+      - name: Version consistency (pyproject vs workflow; version.json may be held back)
+        run: |
+          uv run python - <<'PY'
+          import json, os, sys, tomllib
+
+          py = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+          felb = str(tomllib.load(open("pyproject.toml", "rb"))["tool"]["flet"]["build_number"])
+          sys.path.insert(0, "src")
+          from core.constants import BUILD_NUMBER, APP_VERSION
+
+          vj = json.load(open("version.json"))
+          env_v, env_b = os.environ["BUILD_VERSION"], os.environ["BUILD_NUMBER"]
+          errs = []
+
+          # Hard: the artifact is built with the project's own version, and
+          # the APP's own constants (shown in About + update dialogs) match.
+          if env_v != py:
+              errs.append(f"BUILD_VERSION {env_v!r} != pyproject {py!r}")
+          if APP_VERSION != py:
+              errs.append(f"core.constants.APP_VERSION {APP_VERSION!r} != pyproject {py!r}")
+          if str(BUILD_NUMBER) != env_b:
+              errs.append(f"core.constants.BUILD_NUMBER {BUILD_NUMBER} != BUILD_NUMBER {env_b}")
+          if felb != env_b:
+              errs.append(f"tool.flet.build_number {felb} != BUILD_NUMBER {env_b}")
+
+          def vt(s):
+              return tuple(int(x) for x in s.split("."))
+
+          vj_v, py_v = vj["version"], py
+          if vj_v == py_v:
+              # Fully-synced state must agree on the build number too.
+              if str(vj["build_number"]) != env_b:
+                  errs.append(
+                      f"version.json synced to {vj_v} but build_number "
+                      f"{vj['build_number']} != BUILD_NUMBER {env_b}"
+                  )
+              else:
+                  print(f"versions synced: {py} (build {env_b})")
+          elif vt(vj_v) < vt(py_v):
+              # Owner release policy: version.json (in-app update notes) is
+              # held back from the repo until the Play Store upload ships.
+              print(
+                  f"NOTICE: version.json held back at {vj_v} "
+                  f"(build {vj['build_number']}) while app is {py} - "
+                  "expected until Play Store upload, then commit version.json."
+              )
+          else:
+              errs.append(
+                  f"version.json {vj_v} is AHEAD of pyproject {py} - update notes "
+                  "point at an app version that doesn't exist"
+              )
+
+          if errs:
+              print("Version drift:", file=sys.stderr)
+              print("\n".join(f"  - {e}" for e in errs), file=sys.stderr)
+              sys.exit(1)
+          PY
       - name: Ruff
-        run: uv run ruff check src/ tests/
+        run: uv run ruff check src tests
       - name: Ruff format
-        run: uv run ruff format --check src/ tests/
+        run: uv run ruff format --check src tests
       - name: Tests
         run: uv run pytest -q
       # HARD FAIL if Google TEST ad units ever reappear. Production IDs are
@@ -89,7 +146,7 @@ jobs:
           body: |
             Automated multi-platform build generated from commit `${{ github.sha }}`.
 
-            *Chat with free models through your own local gateway.*
+            *This is a pre-release placeholder. Feel free to edit this title and description with your release notes right from the GitHub Releases UI.*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

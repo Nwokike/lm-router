@@ -15,20 +15,35 @@ def _load() -> tuple[dict, dict]:
     return pyproject, version
 
 
+def _vt(value: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in value.split("."))
+
+
 def test_app_version_matches_everywhere() -> None:
     pyproject, version = _load()
     assert pyproject["project"]["version"] == APP_VERSION
-    assert version["version"] == APP_VERSION
+    # version.json is the in-app update feed. Owner's release policy (same
+    # as Sherlock/CollabShell): it may be HELD BACK from the repo until the
+    # Play Store upload ships, but it must never be AHEAD of the app --
+    # notes would then point at a version nobody can install.
+    assert _vt(version["version"]) <= _vt(APP_VERSION), (
+        f"version.json {version['version']} is ahead of the app {APP_VERSION}"
+    )
     # Deliberately not pinned to a literal: bumping the release must not mean
-    # editing a test. The three sources must simply agree.
+    # editing a test.
     assert APP_VERSION.count(".") == 2
     assert APP_VERSION.startswith("1."), f"expected the 1.x line, got {APP_VERSION}"
 
 
 def test_build_number_matches() -> None:
     pyproject, version = _load()
-    assert pyproject["tool"]["flet"]["build_number"] == version["build_number"]
-    assert version["build_number"] == BUILD_NUMBER
+    py_build = pyproject["tool"]["flet"]["build_number"]
+    assert py_build == BUILD_NUMBER
+    # The feed's build number lags during hold-back, never leads.
+    assert version["build_number"] <= BUILD_NUMBER
+    if version["version"] == APP_VERSION:
+        # Fully synced means fully synced, build number included.
+        assert version["build_number"] == py_build
 
 
 def test_no_engine_is_vendored_in_the_repo() -> None:

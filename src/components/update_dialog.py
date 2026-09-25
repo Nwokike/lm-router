@@ -26,11 +26,13 @@ def build_update_dialog(
         page.run_task(url_launcher.launch_url, url)
 
     def _open_download(_: object) -> None:
-        url = (
-            constants.PLAYSTORE_URL
-            if page.platform and page.platform.is_mobile() and constants.PLAYSTORE_URL
-            else constants.GITHUB_RELEASE_URL
-        )
+        # The feed owns the download links (same as Sherlock/KTV/CollabShell):
+        # a repointed URL is a version.json edit, not a rebuild. Constants
+        # stay as the offline fallback.
+        data = update_data or {}
+        play_url = data.get("playstore_url") or constants.PLAYSTORE_URL
+        github_url = data.get("github_url") or constants.GITHUB_RELEASE_URL
+        url = play_url if page.platform and page.platform.is_mobile() and play_url else github_url
         _launch(url)
 
     actions = [
