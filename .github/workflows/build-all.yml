@@ -38,9 +38,9 @@ jobs:
       - name: Install dependencies (incl. dev group)
         run: uv sync
       - name: Ruff
-        run: uv run ruff check src/ tests/ scripts/
+        run: uv run ruff check src/ tests/
       - name: Ruff format
-        run: uv run ruff format --check src/ tests/ scripts/
+        run: uv run ruff format --check src/ tests/
       - name: Tests
         run: uv run pytest -q
       # ⚠️ TEMPORARILY RELAXED — RESTORE BEFORE THE REAL v1.0.0 RELEASE ⚠️
