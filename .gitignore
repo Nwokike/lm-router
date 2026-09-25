@@ -1,0 +1,29 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Tooling caches
+.ruff_cache/
+.pytest_cache/
+
+# App runtime state (dev runs from repo root)
+app_settings.json
+app_settings.json.bak
+engine_local.py
+providers.json
+conversations/
+logs.json
+lm-router.log*
+tiktoken_cache/
+master.key
+smoke_debug.py
+
+# ZCode session scratch (plans, local state) — not part of the project
+.zcode/
