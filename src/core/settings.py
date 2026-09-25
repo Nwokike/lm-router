@@ -181,9 +181,9 @@ class AppSettings(BaseSettings):
                         "provider %s: stored key has wrong type, dropping key",
                         raw.get("name"),
                     )
+                    name = raw.get("name", "?")
                     _LOAD_WARNINGS.append(
-                        f"Stored key for provider '{raw.get('name', '?')}' had an "
-                        "unreadable format — key dropped.",
+                        f"Stored key for provider '{name}' was unreadable. Key dropped.",
                     )
                 raw["api_key"] = None
             try:
@@ -215,7 +215,7 @@ class AppSettings(BaseSettings):
         except ValidationError as exc:
             LOG.error("settings invalid (%s), starting with defaults", exc.error_count())
             _LOAD_WARNINGS.append(
-                "Stored settings were invalid — started with defaults.",
+                "Stored settings were invalid. Started with defaults.",
             )
             return cls()
 
@@ -232,7 +232,7 @@ class AppSettings(BaseSettings):
             # decode errors escape and abort startup.
             LOG.warning("settings unreadable (%s), moving aside", exc)
             _LOAD_WARNINGS.append(
-                "Settings file unreadable — started fresh (backup kept as app_settings.json.bak).",
+                "Settings file unreadable. Started fresh. Backup: app_settings.json.bak.",
             )
             with contextlib.suppress(OSError):
                 path.replace(path.with_suffix(".json.bak"))
@@ -240,8 +240,8 @@ class AppSettings(BaseSettings):
         if not isinstance(data, dict):
             LOG.warning("settings file is valid JSON but not an object, moving aside")
             _LOAD_WARNINGS.append(
-                "Settings file was not a JSON object — started fresh "
-                "(backup kept as app_settings.json.bak).",
+                "Settings file was not a JSON object. Started fresh. "
+                "Backup: app_settings.json.bak.",
             )
             with contextlib.suppress(OSError):
                 path.replace(path.with_suffix(".json.bak"))

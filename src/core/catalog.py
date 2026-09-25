@@ -149,7 +149,9 @@ def rate_limit_advice(model_id: str, catalog: list[dict[str, Any]]) -> str:
     if str(model_id).lower() == AUTO_MODEL_ID:
         # `auto` composes the healthy pool, so a cap here is a pool-wide one.
         if hint:
-            return f"Rate limited right now. {hint} — try again shortly, or pick a model below."
+            return (
+                f"Rate limited right now. {hint}. Try again shortly, or pick another model below."
+            )
         return "Rate limited right now. Try again shortly, or pick a model below."
 
     alternatives = [

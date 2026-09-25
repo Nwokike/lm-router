@@ -17,7 +17,7 @@ _PRIVACY_URL = "https://kiri.ng/privacy"
 _TERMS_URL = "https://kiri.ng/terms"
 
 # The tinted ring around the slide icon. No token at this width yet
-# (missing: ICON_BACKDROP_RING) — named once here instead of thrice inline.
+# (missing: ICON_BACKDROP_RING), named once here instead of thrice inline.
 _ICON_BACKDROP_RING = 54
 
 # Page-indicator dots: the active pill is four dot-widths long, the inactive
@@ -60,7 +60,7 @@ _SLIDES = [
         "body": (
             "Your chat history and any provider keys you add stay on this "
             "device, in this app's own storage. Prompts are sent to free "
-            "third-party model providers, which may log them — see our "
+            "third-party model providers, which may log them. See our "
             "Privacy Policy."
         ),
     },
@@ -225,7 +225,7 @@ def OnboardingScreen() -> Control:
     )
 
     hint = ft.Text(
-        "Please accept the Privacy Policy & Terms to continue.",
+        "Accept the Privacy Policy and Terms to continue.",
         size=tokens.FONT_XS,
         color=ft.Colors.ERROR,
         text_align=ft.TextAlign.CENTER,

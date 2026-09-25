@@ -68,11 +68,11 @@ async def save_text_file(
         try:
             page.file_picker = picker  # a flet attribute, not a typo
         except Exception as exc:
-            LOG.debug("could not attach file_picker to page: %s", exc)
+            LOG.warning("could not attach file_picker to page: %s", exc)
         try:
             page.update()
         except Exception as exc:
-            LOG.debug("file picker registration update failed: %s", exc)
+            LOG.warning("file picker registration update failed: %s", exc)
 
     destination: str | None = None
     try:
@@ -81,8 +81,10 @@ async def save_text_file(
             file_name=filename,
         )
     except Exception as exc:
-        # Cancelled dialogs and unsupported platforms both land here.
-        LOG.debug("save_file unavailable (%s); using Downloads", exc)
+        # Cancelled dialogs and unsupported platforms both land here. A user
+        # who asked for a save dialog and silently got Downloads instead (or
+        # nothing at all) had no way to tell, so it is a warning.
+        LOG.warning("save_file unavailable (%s); using Downloads", exc)
 
     try:
         if destination:

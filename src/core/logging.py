@@ -79,6 +79,17 @@ class RedactFileHandler(logging.handlers.RotatingFileHandler):
             self.handleError(record)
 
 
+class RedactStreamHandler(logging.StreamHandler):
+    """Console output with the same redaction the file log applies."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.stream.write(redact(self.format(record)) + self.terminator)
+            self.flush()
+        except Exception:
+            self.handleError(record)
+
+
 def tail(lines: int = 200) -> str:
     try:
         with log_path().open("r", encoding="utf-8", errors="replace") as handle:
@@ -93,6 +104,14 @@ def get_logger(name: str) -> logging.Logger:
     logger.setLevel(logging.INFO)
     if not _handler_installed:
         logger.addHandler(RingHandler())
+        formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        # `uv run flet run` printed nothing at all: every handler wrote to a
+        # ring buffer or a file, so the terminal was the one place with no
+        # output. Redaction is identical, so a key can never reach the
+        # console that it is kept out of the file.
+        console_handler = RedactStreamHandler()
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
         try:
             file_handler = RedactFileHandler(
                 log_path(),
@@ -100,9 +119,7 @@ def get_logger(name: str) -> logging.Logger:
                 backupCount=2,
                 encoding="utf-8",
             )
-            file_handler.setFormatter(
-                logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"),
-            )
+            file_handler.setFormatter(formatter)
             logger.addHandler(file_handler)
         except OSError as exc:
             _ring.append(

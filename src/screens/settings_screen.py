@@ -139,10 +139,10 @@ def SettingsScreen():
             if not 1 <= port <= 65535:
                 raise ValueError
         except ValueError:
-            set_notice("Port must be a number from1 to 65535.")
+            set_notice("Port must be 1 to 65535.")
             return
         methods.save_settings({"gateway_port": port, "gateway_autostart": autostart})
-        set_notice("Gateway saved. Restart it to apply a new port.")
+        set_notice("Saved. Restart the gateway to use the new port.")
 
     def _save_prompt(_: object) -> None:
         methods.save_settings({"system_prompt": draft_prompt})
@@ -222,7 +222,7 @@ def SettingsScreen():
             except ValueError:
                 set_notice("Headers must be a JSON object.")
                 return
-        # MCPServerConfig takes `command` (stdio) or `url` (remote) — a single
+        # MCPServerConfig takes `command` (stdio) or `url` (remote). A single
         # `target` key is dropped by extra="ignore", so every add used to fail
         # validation while the screen still reported success.
         target = m_target.strip()
@@ -307,7 +307,7 @@ def SettingsScreen():
                                             weight=ft.FontWeight.W_500,
                                         ),
                                         ft.Text(
-                                            "Choose between Light, Dark, or System",
+                                            "Light, Dark, or System",
                                             size=tokens.FONT_XS,
                                             color=ft.Colors.with_opacity(
                                                 tokens.OPACITY_DIM,
@@ -438,8 +438,7 @@ def SettingsScreen():
         [
             _pad(
                 ft.Text(
-                    "These go straight to kani as per-turn request parameters. "
-                    "Defaults are tuned for volatile free models.",
+                    "Sent per request. Defaults suit free models with strict limits.",
                     size=tokens.FONT_XS,
                     color=ft.Colors.ON_SURFACE_VARIANT,
                 ),
@@ -560,6 +559,8 @@ def SettingsScreen():
         _pad(
             ft.Row(
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                wrap=False,
+                scroll=ft.ScrollMode.AUTO,
                 controls=[
                     ft.Text(
                         "Route chat through another OpenAI-compatible endpoint",
@@ -580,6 +581,8 @@ def SettingsScreen():
             _pad(
                 ft.Row(
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    wrap=False,
+                    scroll=ft.ScrollMode.AUTO,
                     controls=[
                         ft.Column(
                             spacing=tokens.SPACE_XXS,
@@ -686,9 +689,11 @@ def SettingsScreen():
         _pad(
             ft.Row(
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                wrap=False,
+                scroll=ft.ScrollMode.AUTO,
                 controls=[
                     ft.Text(
-                        "Add a local or remote MCP server",
+                        "Local or remote MCP server",
                         size=tokens.FONT_SM,
                         color=theme.dim(is_dark),
                     ),
@@ -725,6 +730,8 @@ def SettingsScreen():
                     test_controls.append(
                         ft.Row(
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            wrap=False,
+                            scroll=ft.ScrollMode.AUTO,
                             controls=[
                                 ft.Row(
                                     spacing=tokens.SPACE_XS,
@@ -773,6 +780,8 @@ def SettingsScreen():
                     controls=[
                         ft.Row(
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            wrap=False,
+                            scroll=ft.ScrollMode.AUTO,
                             controls=[
                                 ft.Column(
                                     spacing=tokens.SPACE_XXS,
@@ -889,7 +898,7 @@ def SettingsScreen():
             setting_row(
                 icon=ft.Icons.TRAVEL_EXPLORE_ROUNDED,
                 title="Built-in web search",
-                subtitle="Keyless hosted search — applies from the next message",
+                subtitle="Keyless hosted search. Applies from the next message.",
                 trailing=ft.Switch(
                     value=search_on,
                     active_color=ft.Colors.PRIMARY,
@@ -903,7 +912,7 @@ def SettingsScreen():
         ],
     )
 
-    # About: the centred identity block, back as it was — minus the open-source
+    # About: the centred identity block, back as it was, minus the open-source
     # licence line, which the owner asked to drop. Buttons are centred too, so
     # the card reads as one block instead of a left-aligned outlier.
     about_rows: list = [
@@ -993,6 +1002,22 @@ def SettingsScreen():
         spacing=0,
         controls=[
             ft.Container(height=tokens.SPACE_SM),
+            # One shared notice line for every save/add/validate callback. It is
+            # always visible when set, so a confirmation is never swallowed.
+            *(
+                [
+                    ft.Container(
+                        padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_MD, tokens.SPACE_LG, 0),
+                        content=ft.Text(
+                            _notice,
+                            size=tokens.FONT_XS,
+                            color=theme.PRIMARY,
+                        ),
+                    ),
+                ]
+                if _notice
+                else []
+            ),
             *appearance,
             *gateway,
             build_banner_ad(),

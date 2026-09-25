@@ -47,7 +47,7 @@
 | **Web Search** | Built-in search tool with automatic fallback to keyless sources, so a capped provider never kills an answer. |
 | **MCP Servers** | Add your own MCP servers; enable, disable and test their tools from Settings. |
 | **Multi-Provider** | Route chat through any OpenAI-compatible endpoint with an optional key stored only on your device. |
-| **Share** | Publish your gateway through a public tunnel with an optional API key, and hand a friend the full model catalog. |
+| **Share** | Publish your gateway through a public tunnel with an optional API key, and hand out the full model catalog to other clients. |
 | **History & Export** | Conversations stay on your device; open, search, copy and export them as Markdown. |
 
 ---
@@ -95,7 +95,7 @@
 | **Chat Core** | kani (OpenAI engine) on an anyio portal | Streaming turns, tool calling, reasoning capture, token budgeting |
 | **Gateway** | router.kiri.ng fetched at startup | Local OpenAI-compatible endpoint with model discovery, health and rate hints |
 | **Tools** | Official mcp SDK + keyless HTTP search | Remote/local MCP servers and built-in web search with fallback |
-| **Sharing** | Stdlib auth proxy + public tunnel | Optional key-protected exposure of the local gateway to a friend's client |
+| **Sharing** | Stdlib auth proxy + public tunnel | Optional key-protected exposure of the local gateway to another OpenAI client |
 
 ### Visual Flow
 

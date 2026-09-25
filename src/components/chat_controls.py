@@ -9,7 +9,7 @@ The session bar replaces the old full-width Dropdown: a single compact strip of
 pills for model, search and MCP, each opening a rich menu. It uses the
 PopupMenuButton + PopupMenuItem(on_click=...) pattern already proven in the
 owner's KTV Player, which deliberately avoids reading the selection from
-`e.data` — the exact mistake that made this app's tabs dead.
+`e.data`: the exact mistake that made this app's tabs dead.
 """
 
 from __future__ import annotations
@@ -177,11 +177,10 @@ def ModelPicker(
         if discovering:
             message, action = "Discovering available models…", None
         elif not state.gateway_running:
-            message, action = "The gateway is stopped.", "Start gateway"
+            message, action = "Gateway stopped.", "Start gateway"
         elif state.models:
             message, action = (
-                "No chat-capable models right now. Other endpoint types are "
-                "listed on the Server tab.",
+                "No chat-capable models. Other endpoint types are on the Server tab.",
                 "Refresh models",
             )
         else:
@@ -311,8 +310,8 @@ def SessionBar(
     # No width=float("inf") here on purpose: an unbounded width let a long model
     # name claim the whole row and push the context readout off-screen. The
     # caller constrains this container (expand=True) and the inner row scrolls
-    # horizontally once the pills no longer fit — the Sherlock chip-track
-    # pattern (wrap=False + ScrollMode.AUTO).
+    # horizontally once the pills no longer fit (the Sherlock chip-track
+    # pattern: wrap=False + ScrollMode.AUTO).
     return ft.Container(
         padding=ft.Padding.symmetric(horizontal=tokens.SPACE_LG, vertical=tokens.SPACE_SM),
         content=ft.Row(
@@ -363,7 +362,7 @@ def Composer(
             controls=[
                 ft.TextField(
                     value=draft,
-                    hint_text="Message LM Router…",
+                    hint_text="Message",
                     multiline=True,
                     shift_enter=True,
                     min_lines=1,

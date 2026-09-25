@@ -26,7 +26,9 @@ async def _http_online() -> bool:
         resp = await asyncio.to_thread(urllib.request.urlopen, req, timeout=_CHECK_TIMEOUT)
         return resp.status == 204
     except Exception as exc:
-        LOG.debug("connectivity probe failed: %s", exc)
+        # A probe failure is what flips the "You're offline" banner, and a
+        # false offline is a wrong claim to the user. Leave a trace.
+        LOG.warning("connectivity probe failed: %s", exc)
         return False
 
 

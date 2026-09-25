@@ -41,7 +41,7 @@ def build_about_dialog(
             "Flet · flet-ads · flet-cli (Apache-2.0)",
             "kani (MIT)",
             "mcp Python SDK (MIT)",
-            "Kiri Router gateway — router.kiri.ng (stdlib only)",
+            "Kiri Router gateway (router.kiri.ng, stdlib only)",
         ],
     )
 

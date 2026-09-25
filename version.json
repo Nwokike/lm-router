@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "update",
   "title": "LM Router 1.0.0",
-  "release_notes": "• Your own Kiri Router gateway, fetched live and running on-device — no setup, no API key\n• The router's `auto` model: it rotates across healthy free models for you\n• Live model catalog with per-model rate limits and endpoint types\n• Chat with streaming replies, visible reasoning, and expandable tool calls\n• Web search plus your own MCP servers (search, fetch and anything else you add)\n• Share your gateway with a friend, with an optional API key\n• Conversation history, markdown export, and a live gateway console",
+  "release_notes": "• Your own Kiri Router gateway, fetched live and running on-device. No setup, no API key\n• The router's `auto` model: it rotates across healthy free models for you\n• Live model catalog with per-model rate limits and endpoint types\n• Chat with streaming replies, visible reasoning, and expandable tool calls\n• Web search plus your own MCP servers (search, fetch and anything else you add)\n• Share your gateway on a public URL, with an optional API key\n• Conversation history, markdown export, and a live gateway console",
   "mandatory": false,
   "github_url": "https://github.com/Nwokike/lm-router/releases/latest",
   "playstore_url": "https://play.google.com/store/apps/details?id=ng.kiri.lmrouter"

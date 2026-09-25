@@ -506,8 +506,7 @@ class AgentService:
             except openai.AuthenticationError:
                 on_error(
                     "auth",
-                    "Gateway rejected the request (401): unknown model or gateway "
-                    "auth issue. Check the Server tab.",
+                    "Gateway returned 401. Unknown model, or gateway auth failed.",
                 )
             except openai.PermissionDeniedError:
                 on_error("forbidden", "Access denied by gateway (403).")
@@ -552,7 +551,7 @@ class AgentService:
                 self._current = self._portal.start_task_soon(_run)
             except Exception as retry_exc:
                 LOG.error("portal unusable after restart: %s", retry_exc)
-                on_error("config", "Agent runtime unavailable. Restart LM Router to recover.")
+                on_error("config", "Engine crashed. Restart LM Router.")
                 return False
         return True
 

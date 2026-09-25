@@ -320,3 +320,83 @@ def test_history_has_no_banner(_renderer_page) -> None:
     assert root is not None
     found = [c for c in _walk(root._b) if getattr(c, "key", None) == ft.ValueKey("parity-banner")]
     assert not found, "History must not render any banner (floor banners banned)"
+
+
+# ------------------------------------------------------- round-2 complaints
+
+
+def _iter_string_constants(path: Path):
+    """Yield non-docstring string literals from a Python file."""
+    import ast
+
+    source = path.read_text(encoding="utf-8")
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return
+    doc_ids: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = getattr(node, "body", None)
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                doc_ids.add(id(body[0].value))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) not in doc_ids:
+                yield node.value
+
+
+def test_ui_strings_have_no_emdash_or_friend() -> None:
+    """The owner bans em-dashes and the word 'friend' in anything the user reads."""
+    # chr() keeps the banned characters out of this source file so RUF001
+    # does not flag the test that enforces the ban.
+    banned_dashes = (chr(0x2014), chr(0x2013))
+    offenders: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        for value in _iter_string_constants(path):
+            if any(dash in value for dash in banned_dashes):
+                offenders.append(f"{path.relative_to(SRC)}: em-dash in {value!r}")
+            if "friend" in value.lower():
+                offenders.append(f"{path.relative_to(SRC)}: 'friend' in {value!r}")
+    assert not offenders, "banned copy found:\n" + "\n".join(offenders)
+
+
+def test_server_screen_renders_on_settings_save() -> None:
+    """The Require-API-key switch saves via settings_version; the screen must subscribe."""
+    server = _read("screens/server_screen.py")
+    assert "state.settings_version" in server, (
+        "ServerScreen does not read state.settings_version: toggling "
+        "'Require API key' re-renders nothing and the key field never appears"
+    )
+    settings = _read("screens/settings_screen.py")
+    assert "if _notice" in settings, (
+        "Settings validation/success notices are set but never rendered"
+    )
+    assert settings.count("set_notice(") >= 10
+
+
+def test_catalog_is_bounded_and_logs_never_autoscroll() -> None:
+    server = _read("screens/server_screen.py")
+    assert "tokens.CATALOG_VIEWPORT" in server, (
+        "Model catalog has no bounded vertical viewport (owner: cannot scroll it)"
+    )
+    assert "auto_scroll=True" not in server, (
+        "server screen must never auto-scroll: it yanks the view away "
+        "from the log line or model the user is reading"
+    )
+    # Every multi-child row that can overflow must be horizontally scrollable:
+    # the owner's repeated 'scrolling sideways' instruction.
+    assert server.count("scroll=ft.ScrollMode.AUTO") >= 5, (
+        f"expected sideway-scrollable rows, found {server.count('scroll=ft.ScrollMode.AUTO')}"
+    )
+
+
+def test_console_logging_exists() -> None:
+    """`uv run flet run` must print logs; ring+file alone showed nothing."""
+    logging_src = _read("core/logging.py")
+    assert "StreamHandler" in logging_src, "no console handler: dev runs log nothing"

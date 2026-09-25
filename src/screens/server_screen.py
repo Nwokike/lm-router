@@ -48,7 +48,7 @@ def _kv_row(label: str, value: str, methods, is_dark: bool) -> ft.Control:
             ft.IconButton(
                 ft.Icons.CONTENT_COPY_ROUNDED,
                 icon_size=tokens.ICON_XS,
-                tooltip=f"Copy {label.lower()}",
+                tooltip=f"Copy {label}",
                 on_click=lambda e, v=value: methods.copy_text(v),
             ),
         )
@@ -89,6 +89,18 @@ def ServerScreen():
     methods = ft.use_context(ControllerMethodsCtx)
     log_filter, set_log_filter = ft.use_state("ALL")
     _ = state.log_version  # subscribe: bumping log_version re-renders this screen
+    # The share-key switch writes through save_settings, which only bumps
+    # settings_version. Without this read the card never re-rendered and the
+    # key field below the switch never appeared.
+    _ = state.settings_version  # subscribe: settings saves (share key toggle) re-render this screen
+    # Load settings ONCE. AppSettings.load() reads disk + parses JSON, and
+    # this screen re-renders on every log flush; re-read only on save
+    # (same pattern as settings_screen).
+    prefs, set_prefs = ft.use_state(lambda: AppSettings.load())
+    ft.use_effect(
+        lambda: set_prefs(AppSettings.load()),
+        [state.settings_version],
+    )
     page = getattr(ft.context, "page", None)
     is_dark = theme.is_dark_mode(page, state.theme_mode)
 
@@ -105,14 +117,23 @@ def ServerScreen():
             continue
         color = _LEVEL_COLORS.get(lvl)
         log_rows.append(
-            ft.Text(
-                f"{record['ts']}  {lvl:<7}  {record['msg']}",
-                size=tokens.FONT_SM,
-                font_family="monospace",
-                max_lines=1,
-                overflow=ft.TextOverflow.CLIP,
-                selectable=True,
-                color=color,
+            # Per-line sideways scroll: the ListView below is vertical-only, so
+            # a long line used to be cut mid-character with no way to read the
+            # tail. The row scrolls, the Text still stays on one line.
+            ft.Row(
+                wrap=False,
+                scroll=ft.ScrollMode.AUTO,
+                controls=[
+                    ft.Text(
+                        f"{record['ts']}  {lvl:<7}  {record['msg']}",
+                        size=tokens.FONT_SM,
+                        font_family="monospace",
+                        max_lines=1,
+                        overflow=ft.TextOverflow.CLIP,
+                        selectable=True,
+                        color=color,
+                    ),
+                ],
             ),
         )
     if not log_rows:
@@ -227,8 +248,7 @@ def ServerScreen():
                     _kv_row("OpenAI base URL", api_url, methods, is_dark),
                     *([_kv_row("Health", summary, None, is_dark)] if summary else []),
                     ft.Text(
-                        "This gateway listens on this device only (127.0.0.1). "
-                        "Sharing publishes it through a public tunnel.",
+                        "Binds 127.0.0.1. Not reachable from another device unless you share it.",
                         size=tokens.FONT_2XS,
                         color=theme.dim(is_dark),
                     ),
@@ -241,7 +261,6 @@ def ServerScreen():
     # verifies no Authorization header at all.
     share_card: ft.Control | None = None
     if running:
-        prefs = AppSettings.load()
         sharing = bool(state.share_url)
         starting = state.share_starting
 
@@ -271,6 +290,13 @@ def ServerScreen():
                                 height=tokens.ICON_XS,
                                 stroke_width=2,
                             ),
+                            # The claim retries for 30s; a bare ring next to a
+                            # disabled button read as a dead control.
+                            ft.Text(
+                                "Starting tunnel…",
+                                size=tokens.FONT_XS,
+                                color=theme.dim(is_dark),
+                            ),
                         ]
                         if starting
                         else []
@@ -290,14 +316,14 @@ def ServerScreen():
                         expand=True,
                         controls=[
                             ft.Text(
-                                "Share this gateway",
+                                "Share",
                                 size=tokens.FONT_MD,
                                 weight=ft.FontWeight.W_600,
                                 color=theme.text_color(is_dark),
                             ),
                             ft.Text(
-                                "Give someone an OpenAI-compatible endpoint they can "
-                                "point their coding harness at.",
+                                "Publishes the gateway on a public URL. "
+                                "Point any OpenAI client at the base URL.",
                                 size=tokens.FONT_XS,
                                 color=theme.dim(is_dark),
                             ),
@@ -320,7 +346,7 @@ def ServerScreen():
                 ),
             )
 
-        # The key rows stay visible WHILE sharing too — hiding them made the
+        # The key rows stay visible WHILE sharing too. Hiding them made the
         # key look like it was thrown away the moment Start was pressed.
         controls.append(
             ft.Row(
@@ -328,7 +354,7 @@ def ServerScreen():
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 controls=[
                     ft.Text(
-                        "Require an API key",
+                        "Require API key",
                         size=tokens.FONT_SM,
                         color=theme.text_color(is_dark),
                     ),
@@ -344,7 +370,7 @@ def ServerScreen():
         )
         if prefs.require_share_key:
             # Editable: generate one, or type any key you prefer. Whatever is
-            # here is what your friend must send as the Bearer token.
+            # here is what the other client must send as the Bearer token.
             controls.append(
                 ft.Row(
                     spacing=tokens.SPACE_SM,
@@ -353,7 +379,7 @@ def ServerScreen():
                         ft.TextField(
                             value=prefs.share_key,
                             label="API key",
-                            hint_text="Generate one or type your own",
+                            hint_text="Generate a key or type one",
                             text_size=tokens.FONT_SM,
                             font_family="monospace",
                             expand=True,
@@ -363,7 +389,7 @@ def ServerScreen():
                         ),
                         ft.IconButton(
                             ft.Icons.AUTORENEW_ROUNDED,
-                            tooltip="Generate a random key",
+                            tooltip="Generate key",
                             on_click=lambda _: methods.regenerate_share_key(),
                         ),
                         ft.IconButton(
@@ -388,10 +414,9 @@ def ServerScreen():
                     border_radius=tokens.RADIUS_MD,
                     bgcolor=ft.Colors.with_opacity(tokens.OPACITY_FAINT, theme.PRIMARY),
                     content=ft.Text(
-                        "Your friend gets the full model catalog — they can pick "
-                        "any model from /v1/models, not just the one selected "
-                        "here. The link is temporary: it changes every time you "
-                        "start sharing and stops working when you stop.",
+                        "Any client on this URL sees the full model catalog via "
+                        "/v1/models, not only the model selected here. The URL "
+                        "changes on every start and stops when you stop sharing.",
                         size=tokens.FONT_2XS,
                         color=theme.PRIMARY,
                     ),
@@ -407,7 +432,7 @@ def ServerScreen():
                     border_radius=tokens.RADIUS_MD,
                     bgcolor=ft.Colors.with_opacity(tokens.OPACITY_FAINT, theme.WARNING),
                     content=ft.Text(
-                        "Without a key, anyone who finds this URL can spend your free-model quota.",
+                        "No key: anyone with the URL can spend the free-model quota.",
                         size=tokens.FONT_2XS,
                         color=theme.WARNING,
                     ),
@@ -425,8 +450,8 @@ def ServerScreen():
             content=ft.Column(spacing=tokens.SPACE_SM, tight=True, controls=controls),
         )
 
-    # Discovered Model Catalog Card — full catalog, page scrolls (the old
-    # [:15] slice hid models: upstream now lists 40+).
+    # Discovered Model Catalog Card: full catalog in its own bounded list (the
+    # old [:15] slice hid models, upstream now lists 40+).
     models_count = len(state.models)
     model_items: list[ft.Control] = []
     for m in state.models:
@@ -447,6 +472,86 @@ def ServerScreen():
         else:
             status_dot_color = ft.Colors.AMBER
 
+        badges: list[ft.Control] = []
+        badges.append(
+            ft.Container(
+                content=ft.Text(
+                    endpoint,
+                    size=tokens.FONT_2XS,
+                    color=ft.Colors.PRIMARY,
+                ),
+                padding=ft.Padding.symmetric(
+                    horizontal=tokens.SPACE_TIGHT,
+                    vertical=tokens.SPACE_XXS,
+                ),
+                border_radius=tokens.RADIUS_SM,
+                bgcolor=ft.Colors.PRIMARY_CONTAINER,
+            ),
+        )
+        if rate_hint:
+            badges.append(
+                ft.Container(
+                    content=ft.Text(
+                        rate_hint,
+                        size=tokens.FONT_2XS,
+                        color=theme.dim(is_dark),
+                        max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                    ),
+                    padding=ft.Padding.symmetric(
+                        horizontal=tokens.SPACE_TIGHT,
+                        vertical=tokens.SPACE_XXS,
+                    ),
+                    border_radius=tokens.RADIUS_SM,
+                    bgcolor=ft.Colors.with_opacity(
+                        tokens.OPACITY_FAINT,
+                        theme.dim(is_dark),
+                    ),
+                ),
+            )
+        if latency is not None:
+            badges.append(
+                ft.Text(
+                    f"{latency}ms",
+                    size=tokens.FONT_XS,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                ),
+            )
+        # Say WHY a catalog row is not offered in chat, rather than silently
+        # hiding it from the picker. The note sits on its own line below the
+        # badges: as a third flex child it stole width from the model id and
+        # squeezed the row into an unreadable strip.
+        row_children: list[ft.Control] = [
+            ft.Row(
+                spacing=tokens.SPACE_TIGHT,
+                controls=[
+                    ft.Container(
+                        width=tokens.DOT_SIZE,
+                        height=tokens.DOT_SIZE,
+                        border_radius=tokens.DOT_RADIUS,
+                        bgcolor=status_dot_color,
+                    ),
+                    ft.Text(
+                        status,
+                        size=tokens.FONT_2XS,
+                        color=status_dot_color,
+                    ),
+                    ft.Text(
+                        m_id,
+                        size=tokens.FONT_SM,
+                        weight=ft.FontWeight.W_500,
+                        # The row scrolls sideways, so the id needs no
+                        # ellipsis; it only must not wrap into a tall blob.
+                        no_wrap=True,
+                    ),
+                ],
+            ),
+            ft.Row(
+                spacing=tokens.SPACE_TIGHT,
+                controls=badges,
+            ),
+        ]
+
         model_items.append(
             ft.Container(
                 padding=ft.Padding.symmetric(
@@ -457,84 +562,19 @@ def ServerScreen():
                 bgcolor=ft.Colors.SURFACE_CONTAINER_LOW
                 if hasattr(ft.Colors, "SURFACE_CONTAINER_LOW")
                 else ft.Colors.SURFACE,
-                content=ft.Row(
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                content=ft.Column(
+                    spacing=tokens.SPACE_XXS,
+                    tight=True,
                     controls=[
+                        # One line, scrollable: badges used to overflow the
+                        # card instead of wrapping.
                         ft.Row(
-                            spacing=tokens.SPACE_TIGHT,
-                            controls=[
-                                ft.Container(
-                                    width=tokens.DOT_SIZE,
-                                    height=tokens.DOT_SIZE,
-                                    border_radius=tokens.DOT_RADIUS,
-                                    bgcolor=status_dot_color,
-                                ),
-                                ft.Text(
-                                    status,
-                                    size=tokens.FONT_2XS,
-                                    color=status_dot_color,
-                                ),
-                                ft.Text(
-                                    m_id,
-                                    size=tokens.FONT_SM,
-                                    weight=ft.FontWeight.W_500,
-                                ),
-                            ],
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            wrap=False,
+                            scroll=ft.ScrollMode.AUTO,
+                            controls=row_children,
                         ),
-                        ft.Row(
-                            spacing=tokens.SPACE_TIGHT,
-                            controls=[
-                                ft.Container(
-                                    content=ft.Text(
-                                        endpoint,
-                                        size=tokens.FONT_2XS,
-                                        color=ft.Colors.PRIMARY,
-                                    ),
-                                    padding=ft.Padding.symmetric(
-                                        horizontal=tokens.SPACE_TIGHT,
-                                        vertical=tokens.SPACE_XXS,
-                                    ),
-                                    border_radius=tokens.RADIUS_SM,
-                                    bgcolor=ft.Colors.PRIMARY_CONTAINER,
-                                ),
-                                *(
-                                    [
-                                        ft.Container(
-                                            content=ft.Text(
-                                                rate_hint,
-                                                size=tokens.FONT_2XS,
-                                                color=theme.dim(is_dark),
-                                            ),
-                                            padding=ft.Padding.symmetric(
-                                                horizontal=tokens.SPACE_TIGHT,
-                                                vertical=tokens.SPACE_XXS,
-                                            ),
-                                            border_radius=tokens.RADIUS_SM,
-                                            bgcolor=ft.Colors.with_opacity(
-                                                tokens.OPACITY_FAINT,
-                                                theme.dim(is_dark),
-                                            ),
-                                        ),
-                                    ]
-                                    if rate_hint
-                                    else []
-                                ),
-                                *(
-                                    [
-                                        ft.Text(
-                                            f"{latency}ms",
-                                            size=tokens.FONT_XS,
-                                            color=ft.Colors.ON_SURFACE_VARIANT,
-                                        ),
-                                    ]
-                                    if latency is not None
-                                    else []
-                                ),
-                            ],
-                        ),
-                        # Say WHY a catalog row is not offered in chat, rather
-                        # than silently hiding it from the picker.
                         *(
                             [
                                 ft.Text(
@@ -563,6 +603,8 @@ def ServerScreen():
             controls=[
                 ft.Row(
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    wrap=False,
+                    scroll=ft.ScrollMode.AUTO,
                     controls=[
                         ft.Text(
                             f"Model Catalog ({models_count})",
@@ -576,12 +618,24 @@ def ServerScreen():
                         ),
                     ],
                 ),
+                # Bounded, self-scrolling viewport, same shape as the log card:
+                # 40+ models otherwise made the page an endless strip.
                 *(
-                    model_items
+                    [
+                        ft.Container(
+                            height=tokens.CATALOG_VIEWPORT,
+                            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                            content=ft.ListView(
+                                spacing=tokens.SPACE_SM,
+                                controls=model_items,
+                                # No auto_scroll: same reason as the log card.
+                            ),
+                        ),
+                    ]
                     if model_items
                     else [
                         ft.Text(
-                            "No models loaded yet. Click 'Refresh models' above.",
+                            "No models. Use Refresh models.",
                             size=tokens.FONT_SM,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
@@ -641,6 +695,10 @@ def ServerScreen():
                     controls=[
                         ft.Row(
                             spacing=tokens.SPACE_SM,
+                            # Zero slack here: dot, status, port, version and
+                            # uptime overflowed a phone width.
+                            wrap=False,
+                            scroll=ft.ScrollMode.AUTO,
                             controls=[
                                 ft.Container(
                                     width=tokens.DOT_SIZE,
@@ -775,10 +833,7 @@ def ServerScreen():
                                             ft.TextButton(
                                                 "Copy logs",
                                                 icon=ft.Icons.CONTENT_COPY_ROUNDED,
-                                                tooltip=(
-                                                    "Copy the app log file "
-                                                    "(terminal may be invisible)"
-                                                ),
+                                                tooltip="Copy log file",
                                                 on_click=lambda _: methods.copy_logs(),
                                             ),
                                         ],

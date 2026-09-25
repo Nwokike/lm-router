@@ -34,11 +34,14 @@ class HttpService:
 
     @staticmethod
     async def _on_request(request: httpx.Request) -> None:
-        LOG.info("> %s %s", request.method, request.url)
+        # DEBUG: these traces fired 2 per request x 4 retry attempts during
+        # gateway start; at INFO they doubled the log-burst render load and
+        # buried real errors. Failures are still logged where they're caught.
+        LOG.debug("> %s %s", request.method, request.url)
 
     @staticmethod
     async def _on_response(response: httpx.Response) -> None:
-        LOG.info("< %s %s", response.status_code, response.request.url)
+        LOG.debug("< %s %s", response.status_code, response.request.url)
 
     async def get(self, url: str, **kwargs: object) -> httpx.Response:
         return await self._request("GET", url, **kwargs)

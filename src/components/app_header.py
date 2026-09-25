@@ -127,7 +127,7 @@ def AppHeader(
                 ),
                 border_radius=tokens.RADIUS_CHIP,
                 bgcolor=ft.Colors.with_opacity(tokens.OPACITY_LIGHT, ft.Colors.ON_SURFACE_VARIANT),
-                tooltip=f"{constants.APP_NAME} {constants.APP_VERSION} — tap for details",
+                tooltip=f"{constants.APP_NAME} {constants.APP_VERSION}. Tap for details",
                 # Only Container is tappable in flet 1.0; this chip used to be
                 # inert, so tapping the version did nothing at all.
                 ink=True,

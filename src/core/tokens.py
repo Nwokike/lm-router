@@ -66,6 +66,7 @@ DOT_RADIUS = 3
 
 # component sizes shared by more than one screen
 LOG_VIEWPORT = 260
+CATALOG_VIEWPORT = 400
 CTA_BUTTON_WIDTH = 220
 CTA_BUTTON_HEIGHT = 52
 DIALOG_WIDTH_MD = 400
@@ -78,6 +79,7 @@ DIALOG_HEIGHT_LG = 480
 __all__ = [
     "ANIM_FAST",
     "ANIM_SLOW",
+    "CATALOG_VIEWPORT",
     "CTA_BUTTON_HEIGHT",
     "CTA_BUTTON_WIDTH",
     "DIALOG_HEIGHT_LG",

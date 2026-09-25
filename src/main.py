@@ -1,6 +1,7 @@
 """LM Router entry point."""
 
 import asyncio
+import contextlib
 import contextvars
 import os
 import time
@@ -19,6 +20,7 @@ from core import constants, theme
 from core.catalog import AUTO_MODEL_ID, chat_models
 from core.logging import LOG
 from core.logging import tail as log_tail
+from core.notify import show_snack
 from core.settings import AppSettings, MCPServerConfig, ProviderConfig, pop_load_warnings
 from core.state import state
 from services import history
@@ -55,6 +57,11 @@ class AppController:
         self.ads: AdService | None = None
         self._stop_requested = False
         self._ui_loop: asyncio.AbstractEventLoop | None = None
+        # 2Hz log-render budget (Sherlock's flusher pattern): log records
+        # mark dirty; ONE task turns bursts into at most two renders/second.
+        self._log_dirty = False
+        self._log_last_emit = 0.0
+        self._log_flush_task: asyncio.Task | None = None
         self._mcp_future: Any = None
         self._share: ShareSession | None = None
         self._tunnel: LocalTunnel | None = None
@@ -238,7 +245,9 @@ class AppController:
         an observable mutation from a worker thread sets the event on the wrong
         loop and the UI silently never repaints. This blocks the calling
         worker (never the UI) until the loop has executed fn. Falls back to a
-        direct call when the loop cannot be determined (tests/headless).
+        direct call when the loop cannot be determined (tests/headless), and
+        a timed-out or failed marshal ALSO falls back to a direct call: the
+        payload is a state write, and dropping it strands a flag forever.
         """
         loop = self._ui_loop
         ctx = self._flet_ctx
@@ -257,20 +266,48 @@ class AppController:
             async def _call() -> object:
                 return ctx.copy().run(call)
 
+            def _direct(why: str) -> object:
+                """Last resort: run it here rather than drop the payload.
+
+                Losing the write is how state flags got stranded: the worker's
+                update (share_starting=False, a cleared share URL) was silently
+                discarded and the button stayed dead forever. Off-loop is not
+                ideal, but writing the state beats never writing it.
+                """
+                LOG.error("UI callback %s: %s", why, getattr(fn, "__name__", fn))
+                try:
+                    return ctx.copy().run(call)
+                except Exception:
+                    LOG.error(
+                        "UI callback direct fallback failed: %s",
+                        getattr(fn, "__name__", fn),
+                        exc_info=True,
+                    )
+                    return None
+
             try:
                 return asyncio.run_coroutine_threadsafe(_call(), loop).result(timeout=30)
             except TimeoutError:
-                LOG.error("UI callback timed out: %s", getattr(fn, "__name__", fn))
-                return None
+                return _direct("timed out")
+            except Exception:
+                # Closed loop, dead connection, anything but a timeout.
+                return _direct("failed")
 
         return run
 
     def _notify_error(self, message: str) -> None:
-        """Surface a failure in the shell banner + log. Never swallow."""
+        """Surface a failure as a banner AND a scroll-independent snack.
+
+        The banner alone is invisible whenever the shell is scrolled away:
+        during onboarding, mid-conversation, or on another tab. The snack is
+        an overlay, so the message is always seen. Never swallow.
+        """
 
         def _apply() -> None:
             state.notice = message
             state.notice_id += 1
+            with contextlib.suppress(Exception):
+                show_snack(self.page, message, bgcolor=theme.ERROR, duration=6000)
 
         LOG.warning("notice: %s", message)
         self._run_on_ui(_apply)()
@@ -279,20 +316,39 @@ class AppController:
         state.notice = ""
 
     def _notify_info(self, message: str) -> None:
-        """Non-error feedback (floating SnackBar); falls back to the banner."""
+        """Non-error feedback (floating SnackBar); falls back to the banner.
+
+        A second info message within 2.5s used to hit the "Dialog is already
+        opened" RuntimeError and drop into the banner, which can be off-screen.
+        Use the same replace-a-lingering-snack dance as core/notify.py.
+        """
         LOG.info("notice: %s", message)
 
         def _apply() -> None:
-            try:
+            def _show() -> None:
                 self.page.show_dialog(
                     ft.SnackBar(
-                        content=ft.Text(message),
+                        content=ft.Text(message, color=ft.Colors.WHITE),
                         behavior=ft.SnackBarBehavior.FLOATING,
                         duration=2500,
                     ),
                 )
-            except Exception:
+
+            def _fallback(exc: Exception) -> None:
+                LOG.warning("info snack failed: %s", exc)
                 state.notice = message
+
+            try:
+                _show()
+            except RuntimeError:
+                popped = self.page.pop_dialog()
+                if popped is None or isinstance(popped, ft.SnackBar):
+                    try:
+                        _show()
+                    except Exception as exc:
+                        _fallback(exc)
+            except Exception as exc:
+                _fallback(exc)
 
         self._run_on_ui(_apply)()
 
@@ -345,12 +401,52 @@ class AppController:
         self.page.show_dialog(dialog)
 
     def _bump_logs(self) -> None:
-        try:
-            state.log_version += 1
-        except RuntimeError:
-            # logged from a non-flet thread with no page context; the UI
-            # catches the next in-context bump
+        """A log record arrived. Mark dirty; one flusher renders at ~2Hz.
+
+        Called from arbitrary threads by RingHandler.emit. This never writes
+        an observable directly: in Flet 1.0 any AppState write re-renders
+        every use_context(AppStateCtx) component (~250ms of event-loop time
+        each, measured) and a gateway start emits dozens of records back to
+        back. Unthrottled, that storm saturated the loop and froze the whole
+        app; Sherlock funnels the identical problem through this same 2Hz
+        render budget.
+        """
+        self._log_dirty = True
+        now = time.monotonic()
+        if now - self._log_last_emit < 0.5:
+            return  # a flush is already pending for this window
+        self._log_last_emit = now
+        loop = self._ui_loop
+        if loop is None:
+            # Pre-loop boot record: no components are mounted, so a direct
+            # bump notifies nobody and cannot schedule a repaint.
+            self._log_dirty = False
+            with contextlib.suppress(RuntimeError):
+                state.log_version += 1
             return
+        with contextlib.suppress(RuntimeError):
+            loop.call_soon_threadsafe(self._start_log_flusher)
+
+    def _start_log_flusher(self) -> None:
+        """Schedule the flusher on the UI loop (idempotent)."""
+        if self._log_flush_task is not None and not self._log_flush_task.done():
+            return
+        self._log_flush_task = asyncio.create_task(self._log_flusher())
+
+    async def _log_flusher(self) -> None:
+        """One render per window; keeps the cadence while records keep landing."""
+        try:
+            await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            self._log_flush_task = None
+            return
+        if self._log_dirty:
+            self._log_dirty = False
+            state.log_version += 1
+        self._log_flush_task = None
+        if self._log_dirty:
+            # Records landed during the window; keep the ~2Hz cadence.
+            self._start_log_flusher()
 
     def _in_flet_ctx(self, fn: Callable) -> Callable:
         """Run fn on the Flet event loop under the captured context.
@@ -400,18 +496,23 @@ class AppController:
             status, _port = self.services.engine.start()
             if status == "started" and manual:
                 LOG.info("gateway started by user request")
+            # The catalog fetch runs BEFORE the button flips back. It can
+            # take seconds; marking done first made the app look idle while
+            # it was still working.
+            self._fetch_models(refresh=False)
         except Exception as exc:
             LOG.error("gateway start failed: %s", exc)
             self._notify_error(f"Gateway failed to start: {str(exc)[:200]}")
-            return
         finally:
             self._in_flet_ctx(_mark_done)()
-        self._fetch_models(refresh=False)
 
     def _start_gateway(self) -> None:
         if state.gateway_starting:
-            LOG.debug("start ignored: already starting")
+            LOG.info("start ignored: already starting")
             return
+        # Flip the guard synchronously on the loop: the flag used to be set
+        # only after the run_thread hop, so a fast second tap raced past it.
+        state.gateway_starting = True
         self.page.run_thread(self._start_gateway_quiet, manual=True)
 
     def _show_interstitial(self) -> None:
@@ -537,7 +638,7 @@ class AppController:
                 state.model = ""
         if data and not ids:
             self._notify_error(
-                "No active chat models right now — try Refresh models on the Server tab.",
+                "No active chat models. Use Refresh models on the Server tab.",
             )
         LOG.info("model catalog: %d total, %d chat-active", len(data), len(ids))
 
@@ -732,7 +833,7 @@ class AppController:
             # A broken tool registry used to silently drop search/MCP
             # (audit D): tell the user the turn is running degraded.
             self._in_flet_ctx(self._notify_error)(
-                f"Tools unavailable — running without search/MCP ({tool_err[:100]}).",
+                f"Tools unavailable. Running without search/MCP ({tool_err[:100]}).",
             )
         index = self._in_flet_ctx(self._begin_turn)(text)
         if index is None:
@@ -840,11 +941,11 @@ class AppController:
             items = await asyncio.to_thread(history.list_conversations)
         except Exception as exc:
             LOG.warning("conversation save failed: %s", exc)
-            self._notify_error("Conversation not saved — check disk space (see logs).")
+            self._notify_error("Conversation not saved. Check disk space. See logs.")
             return
         state.conversations = items
         if not ok:
-            self._notify_error("Conversation not saved — check disk space (see logs).")
+            self._notify_error("Conversation not saved. Check disk space. See logs.")
 
     # ── sharing the gateway with someone else ───────────────────────────
     #
@@ -857,11 +958,11 @@ class AppController:
         self.settings.share_key = generate_key()
         self.settings.save()
         LOG.info("share key regenerated")
-        self._notify_info("New share key generated. Copy it to your friend.")
+        self._notify_info("New key generated. Copy it to the other client.")
 
     def _start_share(self) -> None:
         if not state.gateway_running:
-            self._notify_error("Start the gateway on this tab before sharing it.")
+            self._notify_error("Start the gateway first.")
             return
         if self._share is not None:
             self._stop_share()
@@ -871,6 +972,9 @@ class AppController:
         # log lines and one seemingly dead button.
         if state.share_starting:
             LOG.warning("share start ignored: already in flight")
+            # A log line nobody reads is the whole "sharing never started"
+            # complaint: say it on screen too.
+            self._notify_info("Sharing is already starting.")
             return
 
         key = self.settings.share_key if self.settings.require_share_key else ""
@@ -882,61 +986,93 @@ class AppController:
             state.share_starting = True
             state.share_error = ""
 
+        def _mark_done() -> None:
+            state.share_starting = False
+
         self._in_flet_ctx(_mark_starting)()
 
         def work() -> None:
-            def _mark_done() -> None:
-                state.share_starting = False
-
-            port = self.services.engine.port or state.gateway_port
-            session = ShareSession(port, key=key)
-            if not session.start_proxy():
-                self._in_flet_ctx(_mark_done)()
-                self._in_flet_ctx(self._set_share_error)(
-                    "Could not start the local share proxy. Another app may hold the port."
-                )
-                return
-            # localtunnel protocol, pure stdlib: works on a phone, where there
-            # is no ssh client. The old ssh -R path is gone, not a fallback.
-            tunnel = LocalTunnel(session.proxy_port)
+            # Every exit clears the flag. The unguarded version could raise
+            # anywhere (proxy bind, tunnel claim, state write), the thread
+            # died, and Start sharing stayed disabled with no signal at all.
             try:
-                url = tunnel.start()
-            except Exception as exc:
-                session.stop()
-                self._in_flet_ctx(_mark_done)()
-                self._in_flet_ctx(self._set_share_error)(
-                    f"Could not open a tunnel: {str(exc)[:160]}"
-                )
-                return
-
-            def done() -> None:
-                # done() runs on the Flet loop from inside a worker thread.
-                # Anything raised here used to die with the thread, so the
-                # button read as dead and the log card stayed empty.
-                try:
-                    self._share = session
-                    self._tunnel = tunnel
-                    self._share_url = url
-                    state.share_url = url
-                    state.share_error = ""
-                    state.share_starting = False
-                    LOG.info("sharing gateway at %s (auth=%s)", url, bool(key))
-                except Exception as exc:
-                    LOG.error("share state update failed: %s", exc, exc_info=True)
-                    tunnel.stop()
-                    session.stop()
-                    self._share = None
-                    self._tunnel = None
-                    self._share_url = ""
-                    state.share_url = ""
-                    state.share_starting = False
-                    self._notify_error(
-                        f"Sharing started but could not be shown in the UI: {str(exc)[:160]}"
+                port = self.services.engine.port or state.gateway_port
+                session = ShareSession(port, key=key)
+                if not session.start_proxy():
+                    self._in_flet_ctx(self._set_share_error)(
+                        "Share proxy failed to bind. Another app may hold the port."
                     )
+                    return
 
-            self._in_flet_ctx(done)()
+                def _tunnel_failed(reason: str) -> None:
+                    # LocalTunnel calls this from its pump thread, so it must
+                    # be marshaled like any other worker write. Without it a
+                    # dead relay left its URL on screen looking alive.
+                    LOG.warning("share tunnel error: %s", reason)
 
-        self.page.run_thread(work)
+                    def _apply() -> None:
+                        self._share_url = ""
+                        state.share_url = ""
+                        state.share_error = f"Tunnel closed: {reason}"
+
+                    self._in_flet_ctx(_apply)()
+
+                # localtunnel protocol, pure stdlib: works on a phone, where
+                # there is no ssh client. The old ssh -R path is gone, not a
+                # fallback. on_error was accepted but never supplied, so a
+                # dropped relay produced nothing but a log line.
+                tunnel = LocalTunnel(session.proxy_port, on_error=_tunnel_failed)
+                try:
+                    url = tunnel.start()
+                except Exception as exc:
+                    session.stop()
+                    self._in_flet_ctx(self._set_share_error)(
+                        f"Could not open a tunnel: {str(exc)[:160]}"
+                    )
+                    return
+
+                def done() -> None:
+                    # done() runs on the Flet loop from inside a worker thread.
+                    # Anything raised here used to die with the thread, so the
+                    # button read as dead and the log card stayed empty.
+                    try:
+                        self._share = session
+                        self._tunnel = tunnel
+                        self._share_url = url
+                        state.share_url = url
+                        state.share_error = ""
+                        state.share_starting = False
+                        LOG.info("sharing gateway at %s (auth=%s)", url, bool(key))
+                    except Exception as exc:
+                        LOG.error("share state update failed: %s", exc, exc_info=True)
+                        tunnel.stop()
+                        session.stop()
+                        self._share = None
+                        self._tunnel = None
+                        self._share_url = ""
+                        state.share_url = ""
+                        state.share_starting = False
+                        self._notify_error(
+                            f"Sharing started but the UI did not update: {str(exc)[:160]}"
+                        )
+
+                self._in_flet_ctx(done)()
+            except Exception as exc:
+                LOG.error("share worker failed: %s", exc, exc_info=True)
+                with contextlib.suppress(Exception):
+                    self._in_flet_ctx(self._set_share_error)(f"Sharing failed: {str(exc)[:160]}")
+            finally:
+                self._in_flet_ctx(_mark_done)()
+
+        try:
+            self.page.run_thread(work)
+        except Exception as exc:
+            # The worker never ran, so its finally never runs either. The flag
+            # has to be cleared here or Start sharing stays dead.
+            LOG.error("share dispatch failed: %s", exc, exc_info=True)
+            with contextlib.suppress(Exception):
+                self._in_flet_ctx(self._set_share_error)(f"Sharing failed: {str(exc)[:160]}")
+                self._in_flet_ctx(_mark_done)()
 
     def _stop_share(self) -> None:
         session, self._share = self._share, None
@@ -1017,7 +1153,7 @@ class AppController:
             # Names prefix tool ids (server.tool) — duplicates corrupt the
             # per-tool disable mapping.
             self._notify_error(
-                f"An MCP server named '{name}' already exists (names must be unique).",
+                f"MCP server '{name}' already exists.",
             )
             return
         try:
@@ -1079,7 +1215,7 @@ class AppController:
             try:
                 names = agent.call(probe)
             except TimeoutError:
-                deliver(("err", "Timed out after 20s — check the URL/command."))
+                deliver(("err", "Timed out after 20s. Check the URL or command."))
                 return
             except Exception as exc:
                 LOG.warning("mcp test failed: %s", exc)
@@ -1239,7 +1375,7 @@ class AppController:
 
     def _conversation_loaded(self, ok: bool, agent: Any, conversation_id: str) -> None:
         if not ok:
-            self._notify_error("Could not load that conversation (see logs).")
+            self._notify_error("Could not load conversation. See logs.")
             return
         state.active_conversation = conversation_id
         state.messages = history.messages_from_history(agent)
@@ -1262,7 +1398,7 @@ class AppController:
         state.conversations = items
         if failures:
             self._notify_error(
-                f"Could not delete {failures} conversation file(s) — see logs.",
+                f"Could not delete {failures} conversation file(s). See logs.",
             )
         if start_new:
             self._new_conversation()
@@ -1294,7 +1430,7 @@ class AppController:
     def _export_conversation(self, conversation_id: str) -> None:
         content, filename = history.export_conversation_markdown(conversation_id)
         if not content:
-            self._notify_error("Export failed: conversation not readable.")
+            self._notify_error("Export failed. Conversation unreadable.")
             return
 
         async def _write() -> None:
@@ -1323,7 +1459,7 @@ class AppController:
             return
         if not data:
             if not silent:
-                self._notify_info(f"You're up to date (build {constants.BUILD_NUMBER}).")
+                self._notify_info(f"Up to date. Build {constants.BUILD_NUMBER}.")
             return
         state.update_info = data
         if not silent:
