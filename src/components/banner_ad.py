@@ -39,8 +39,6 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
         return ft.Container(width=0, height=0)
 
     is_dark = theme.is_dark_mode(page, state.theme_mode)
-    if not constants.USE_TEST_IDS:
-        return ft.Container(width=0, height=0)  # prod unit ids not set yet
 
     if not _HAS_ADS:
         return ft.Container(width=0, height=0)

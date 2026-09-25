@@ -18,11 +18,12 @@ CONVERSATIONS_DIR = "conversations"
 LOG_RING_SIZE = 500
 INTERSTITIAL_EVERY = 3
 
-# Google test unit IDs (AdMob policy: test units during development).
-# USE_TEST_IDS flips to False and prod IDs go here at Play Store release.
-USE_TEST_IDS = True
-AD_BANNER_UNIT_ID_ANDROID = "ca-app-pub-3940256099942544/9214589741"
-AD_INTERSTITIAL_UNIT_ID_ANDROID = "ca-app-pub-3940256099942544/1033173712"
+# Production AdMob units (from the AdMob console, 2026-09-25).
+# USE_TEST_IDS stays False; CI fails any build whose files carry the Google
+# test publisher prefix, so a test unit can never ship by accident.
+USE_TEST_IDS = False
+AD_BANNER_UNIT_ID_ANDROID = "ca-app-pub-5679949845754640/9070470494"
+AD_INTERSTITIAL_UNIT_ID_ANDROID = "ca-app-pub-5679949845754640/2372451777"
 
 # Keyless hosted search endpoint (same one OpenCode's own websearch tool calls).
 SEARCH_ENDPOINT = "https://mcp.exa.ai/mcp"

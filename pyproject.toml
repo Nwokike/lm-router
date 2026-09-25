@@ -46,7 +46,7 @@ host = "app"
 bundle_id = "ng.kiri.lmrouter"
 
 [tool.flet.android.meta_data]
-"com.google.android.gms.ads.APPLICATION_ID" = "ca-app-pub-3940256099942544~3347511713"
+"com.google.android.gms.ads.APPLICATION_ID" = "ca-app-pub-5679949845754640~4946644229"
 
 [tool.flet.android.permission]
 "android.permission.INTERNET" = true

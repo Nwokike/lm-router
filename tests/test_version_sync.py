@@ -89,20 +89,34 @@ def test_playstore_url_matches_the_android_bundle_id() -> None:
     assert PLAYSTORE_URL.startswith("https://play.google.com/store/apps/details")
 
 
-def test_relaxed_admob_guard_is_flagged_for_restore() -> None:
-    """The AdMob guard is relaxed on purpose; keep the reminder discoverable.
+def test_production_admob_units_and_hard_guard() -> None:
+    """Production AdMob units only, with the CI guard back at full strength.
 
-    We ship Google's TEST ad units until the Play listing exists. A future
-    release must swap in production IDs and restore the hard-fail branch — the
-    warnings in pyproject.toml and the workflow exist to make that hard to miss.
+    This project shipped Google's TEST units while the Play listing was
+    pending and deliberately relaxed the guard with restore notes. Now that
+    the real units exist, this test pins the state: test IDs must be absent
+    from every file the guard greps, and the guard must fail the build.
     """
+    from core.constants import (
+        AD_BANNER_UNIT_ID_ANDROID,
+        AD_INTERSTITIAL_UNIT_ID_ANDROID,
+        USE_TEST_IDS,
+    )
+
     pyproject_text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     workflow_text = (ROOT / ".github" / "workflows" / "build-all.yml").read_text(encoding="utf-8")
     constants_text = (ROOT / "src" / "core" / "constants.py").read_text(encoding="utf-8")
 
-    # The test ID really is still in place (so the guard has something to catch).
-    assert "3940256099942544" in pyproject_text
-    assert "3940256099942544" in constants_text
-    # Both places carry an explicit restore reminder.
-    assert "PRODUCTION" in pyproject_text.upper()
-    assert "RESTORE" in workflow_text.upper()
+    # Production units, sourced from the AdMob console.
+    assert "ca-app-pub-5679949845754640~4946644229" in pyproject_text
+    assert AD_BANNER_UNIT_ID_ANDROID == "ca-app-pub-5679949845754640/9070470494"
+    assert AD_INTERSTITIAL_UNIT_ID_ANDROID == "ca-app-pub-5679949845754640/2372451777"
+    assert USE_TEST_IDS is False
+
+    # No Google test publisher prefix anywhere the guard greps...
+    assert "3940256099942544" not in pyproject_text
+    assert "3940256099942544" not in constants_text
+    # ...and the guard is a hard failure again, not a warning.
+    assert "3940256099942544" in workflow_text
+    assert "exit 1" in workflow_text
+    assert "AdMob release-ID guard" in workflow_text
