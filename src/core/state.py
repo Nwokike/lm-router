@@ -32,6 +32,15 @@ class AppState:
     gateway_lan_ip: str = ""
     gateway_lan_url: str = ""
 
+    # sharing (public tunnel in front of the gateway). The claim retries for
+    # up to 30s, so the flag is an in-flight guard: a second click would
+    # start a SECOND proxy instead of joining the first.
+    share_starting: bool = False
+    # Rendered inline in the share card; never a dead attribute on the
+    # controller (a failure the owner cannot see is a failure that did not
+    # happen as far as he is concerned).
+    share_error: str = ""
+
     # catalog + chat
     model: str = ""
     busy: bool = False

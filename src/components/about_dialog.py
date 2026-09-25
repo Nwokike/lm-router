@@ -64,7 +64,7 @@ def build_about_dialog(
             ],
         ),
         content=ft.Container(
-            width=400,
+            width=tokens.DIALOG_WIDTH_MD,
             content=ft.Column(
                 spacing=tokens.SPACE_SM,
                 tight=True,

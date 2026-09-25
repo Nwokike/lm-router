@@ -8,11 +8,16 @@ from components.banner_ad import build_banner_ad
 from components.chat_controls import Composer, SessionBar
 from components.thinking import ThinkingBlock, ToolCallBlock
 from core import theme as app_theme
+from core import tokens
 from core.state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
 
 # Keep ads in the conversation, but spaced so a long chat does not become a
 # wall of banners.  The owner-facing default is one banner per assistant reply.
+# A banner is never the last control of the ListView: a banner ad stranded at
+# the floor of the thread (with nothing under it but the composer) reads as
+# chrome the app forgot to clear, so the modulo check is ANDed with
+# "this reply is not the final message".
 BANNER_AD_EVERY_N_REPLIES = 1
 
 
@@ -41,7 +46,9 @@ def _open_edit_dialog(current_text: str) -> None:
     page.show_dialog(
         ft.AlertDialog(
             modal=False,
-            title=ft.Text("Edit & resend", size=16, weight=ft.FontWeight.W_600),
+            title=ft.Text("Edit & resend", size=tokens.FONT_TITLE, weight=ft.FontWeight.W_600),
+            # 420: tokens.DIALOG_WIDTH_LG is gone from the current tokens.py
+            # (only MD=400 / XL=560 remain), so the literal stays for now.
             content=ft.Container(content=field, width=420),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda _e: page.pop_dialog()),
@@ -62,7 +69,8 @@ def _with_menu(control: ft.Control, actions: list[tuple[str, Callable[[], None]]
     if not actions:
         return control
     items = [
-        ft.PopupMenuItem(content=ft.Row([ft.Text(label, size=13)])) for label, _callback in actions
+        ft.PopupMenuItem(content=ft.Row([ft.Text(label, size=tokens.FONT_BODY_SM)]))
+        for label, _callback in actions
     ]
 
     def _selected(e: ft.ControlEvent) -> None:
@@ -94,21 +102,27 @@ def ChatScreen():
         spacing=0,
         vertical_alignment=ft.CrossAxisAlignment.CENTER,
         controls=[
-            SessionBar(state=state, methods=methods, is_dark=is_dark_page),
-            ft.Container(expand=True),
+            # expand=True here, not inside SessionBar: a scrollable strip only
+            # scrolls once something constrains its width. Letting SessionBar
+            # claim an unbounded width instead pushed this label and the
+            # spinner off-screen whenever a model had a long name.
+            ft.Container(
+                expand=True,
+                content=SessionBar(state=state, methods=methods, is_dark=is_dark_page),
+            ),
             (
                 ft.Row(
-                    spacing=4,
+                    spacing=tokens.SPACE_XS,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=[
                         ft.Icon(
                             ft.Icons.DATA_SAVER_ON_ROUNDED,
-                            size=14,
+                            size=tokens.ICON_XS,
                             color=ft.Colors.PRIMARY,
                         ),
                         ft.Text(
                             context_label,
-                            size=11,
+                            size=tokens.FONT_XS,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
                     ],
@@ -116,7 +130,11 @@ def ChatScreen():
                 if context_label
                 else ft.Container()
             ),
-            ft.ProgressRing(width=16, height=16, stroke_width=2) if state.busy else ft.Container(),
+            (
+                ft.ProgressRing(width=tokens.ICON_XS, height=tokens.ICON_XS, stroke_width=2)
+                if state.busy
+                else ft.Container()
+            ),
         ],
     )
 
@@ -140,12 +158,12 @@ def ChatScreen():
                 # colour belongs on the Text child.
                 content=ft.Text(
                     content,
-                    size=14,
+                    size=tokens.FONT_MD,
                     color=ft.Colors.ON_PRIMARY_CONTAINER,
                 ),
                 bgcolor=ft.Colors.PRIMARY_CONTAINER,
-                border_radius=14,
-                padding=10,
+                border_radius=tokens.RADIUS_BUBBLE,
+                padding=ft.Padding.all(tokens.SPACE_SNUG),
             )
             user_actions: list[tuple[str, Callable[[], None]]] = [
                 ("Copy", lambda c=content: methods.copy_text(c))
@@ -176,10 +194,15 @@ def ChatScreen():
         elif role == "error":
             rows.append(
                 ft.Row(
-                    spacing=8,
+                    spacing=tokens.SPACE_SM,
                     controls=[
-                        ft.Icon(ft.Icons.ERROR, size=18, color=ft.Colors.ERROR),
-                        ft.Text(content, size=14, color=ft.Colors.ERROR, selectable=True),
+                        ft.Icon(ft.Icons.ERROR, size=tokens.ICON_SM, color=ft.Colors.ERROR),
+                        ft.Text(
+                            content,
+                            size=tokens.FONT_MD,
+                            color=ft.Colors.ERROR,
+                            selectable=True,
+                        ),
                     ],
                 ),
             )
@@ -187,7 +210,7 @@ def ChatScreen():
             placeholder = not content and state.busy and index == last_index
             body: ft.Control
             if placeholder:
-                body = ft.ProgressRing(width=16, height=16, stroke_width=2)
+                body = ft.ProgressRing(width=tokens.ICON_XS, height=tokens.ICON_XS, stroke_width=2)
             else:
                 body = app_theme.markdown(content or "…", is_dark=is_dark)
             usage = message.get("usage")
@@ -213,7 +236,7 @@ def ChatScreen():
             caption = (
                 ft.Text(
                     " · ".join(caption_parts),
-                    size=11,
+                    size=tokens.FONT_XS,
                     color=ft.Colors.ON_SURFACE_VARIANT,
                 )
                 if caption_parts
@@ -227,7 +250,7 @@ def ChatScreen():
                 meta_controls.append(
                     ft.IconButton(
                         ft.Icons.CONTENT_COPY_ROUNDED,
-                        icon_size=13,
+                        icon_size=tokens.ICON_XS,
                         tooltip="Copy message",
                         on_click=lambda e, txt=content: methods.copy_text(txt),
                     ),
@@ -256,12 +279,12 @@ def ChatScreen():
             rows.append(
                 _with_menu(
                     ft.Column(
-                        spacing=4,
+                        spacing=tokens.SPACE_XS,
                         controls=assistant_controls
                         + (
                             [
                                 ft.Row(
-                                    spacing=4,
+                                    spacing=tokens.SPACE_XS,
                                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                                     controls=meta_controls,
                                 ),
@@ -274,7 +297,9 @@ def ChatScreen():
                 ),
             )
             assistant_replies += 1
-            if assistant_replies % BANNER_AD_EVERY_N_REPLIES == 0:
+            # Never-last rule: a banner is skipped when this reply is the final
+            # message, so the bottom of the thread is always a real message.
+            if assistant_replies % BANNER_AD_EVERY_N_REPLIES == 0 and index < last_index:
                 rows.append(build_banner_ad())
 
     if state.busy:
@@ -283,7 +308,9 @@ def ChatScreen():
             rows.append(
                 ft.Row(
                     alignment=ft.MainAxisAlignment.CENTER,
-                    controls=[ft.ProgressRing(width=16, height=16, stroke_width=2)],
+                    controls=[
+                        ft.ProgressRing(width=tokens.ICON_XS, height=tokens.ICON_XS, stroke_width=2)
+                    ],
                 ),
             )
 
@@ -291,21 +318,21 @@ def ChatScreen():
         rows.append(
             ft.Container(
                 alignment=ft.Alignment.CENTER,
-                padding=24,
+                padding=ft.Padding.all(tokens.SPACE_XL),
                 content=ft.Column(
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=8,
+                    spacing=tokens.SPACE_SM,
                     controls=[
                         ft.Icon(
                             ft.Icons.CHAT_BUBBLE_OUTLINE,
-                            size=40,
+                            size=tokens.ICON_XL,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
                         ft.Text(
                             "Ask anything."
                             if state.gateway_running
                             else "Gateway is offline. Start it on the Server tab.",
-                            size=14,
+                            size=tokens.FONT_MD,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
                         ft.FilledButton(
@@ -339,8 +366,8 @@ def ChatScreen():
             session_bar,
             ft.ListView(
                 expand=True,
-                spacing=12,
-                padding=ft.Padding.symmetric(horizontal=16, vertical=8),
+                spacing=tokens.SPACE_MD,
+                padding=ft.Padding.symmetric(horizontal=tokens.SPACE_LG, vertical=tokens.SPACE_SM),
                 controls=rows,
                 auto_scroll=True,
                 auto_scroll_animation=0,

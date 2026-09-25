@@ -29,7 +29,10 @@ def settings_card(controls: list[ft.Control]) -> ft.Container:
             )
         rows.append(control)
     return ft.Container(
-        content=ft.Column(controls=rows, spacing=0, tight=True),
+        # No `tight`: a tight Column hugs its children's intrinsic width and
+        # the card renders narrow. Sherlock's `_settings_card` lets the Column
+        # stretch so the card fills the available width.
+        content=ft.Column(controls=rows, spacing=0),
         margin=ft.Margin(tokens.SPACE_XL, 0, tokens.SPACE_XL, tokens.SPACE_SM),
         border_radius=tokens.RADIUS_LG,
         bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,

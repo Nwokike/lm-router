@@ -16,6 +16,19 @@ from state.controller_ctx import ControllerMethodsCtx
 _PRIVACY_URL = "https://kiri.ng/privacy"
 _TERMS_URL = "https://kiri.ng/terms"
 
+# The tinted ring around the slide icon. No token at this width yet
+# (missing: ICON_BACKDROP_RING) — named once here instead of thrice inline.
+_ICON_BACKDROP_RING = 54
+
+# Page-indicator dots: the active pill is four dot-widths long, the inactive
+# dot is dot-height. No token at 4 for the corner radius (DOT_RADIUS is 3).
+_ACTIVE_DOT_WIDTH = tokens.DOT_SIZE * 4
+_DOT_HEIGHT = tokens.SPACE_SM
+_DOT_RADIUS = 4
+
+# Swipe velocity (logical px/s) that counts as a deliberate flick.
+_SWIPE_VELOCITY = 200
+
 # Strong references so haptic asyncio tasks are never garbage-collected
 # mid-flight (RUF006): fire-and-forget tasks must outlive their frame.
 _background_tasks: set[asyncio.Task] = set()
@@ -66,7 +79,10 @@ def _build_slide(s: dict) -> ft.Column:
             height=tokens.ICON_FEATURE,
             color=ft.Colors.WHITE if is_dark else None,
         )
-        bg_color = ft.Colors.with_opacity(0.10, ft.Colors.WHITE if is_dark else theme.PRIMARY)
+        bg_color = ft.Colors.with_opacity(
+            tokens.OPACITY_TINT,
+            ft.Colors.WHITE if is_dark else theme.PRIMARY,
+        )
     else:
         icon_content = ft.Icon(s["icon"], size=tokens.ICON_FEATURE, color=s["color"])
         bg_color = ft.Colors.with_opacity(tokens.OPACITY_LIGHT, s["color"])
@@ -74,9 +90,9 @@ def _build_slide(s: dict) -> ft.Column:
         [
             ft.Container(
                 content=icon_content,
-                width=tokens.ICON_FEATURE + 54,
-                height=tokens.ICON_FEATURE + 54,
-                border_radius=(tokens.ICON_FEATURE + 54) // 2,
+                width=tokens.ICON_FEATURE + _ICON_BACKDROP_RING,
+                height=tokens.ICON_FEATURE + _ICON_BACKDROP_RING,
+                border_radius=(tokens.ICON_FEATURE + _ICON_BACKDROP_RING) // 2,
                 bgcolor=bg_color,
                 alignment=ft.Alignment.CENTER,
             ),
@@ -86,7 +102,7 @@ def _build_slide(s: dict) -> ft.Column:
                 size=tokens.FONT_XXL,
                 weight=ft.FontWeight.W_800,
                 text_align=ft.TextAlign.CENTER,
-                font_family="Outfit",
+                font_family=theme.FONT,
             ),
             ft.Container(height=tokens.SPACE_MD),
             ft.Text(
@@ -94,7 +110,7 @@ def _build_slide(s: dict) -> ft.Column:
                 size=tokens.FONT_MD,
                 color=ft.Colors.ON_SURFACE_VARIANT,
                 text_align=ft.TextAlign.CENTER,
-                font_family="Outfit",
+                font_family=theme.FONT,
             ),
         ],
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -152,10 +168,10 @@ def OnboardingScreen() -> Control:
         velocity = getattr(e, "primary_velocity", None)
         if velocity is None:
             return
-        if velocity < -200 and not is_last:
+        if velocity < -_SWIPE_VELOCITY and not is_last:
             _haptic()
             set_page_idx(min(page_idx + 1, len(_SLIDES) - 1))
-        elif velocity > 200 and page_idx > 0:
+        elif velocity > _SWIPE_VELOCITY and page_idx > 0:
             _haptic()
             set_page_idx(page_idx - 1)
 
@@ -167,9 +183,9 @@ def OnboardingScreen() -> Control:
     for i in range(len(_SLIDES)):
         active = i == page_idx
         dot = ft.Container(
-            width=24 if active else 8,
-            height=8,
-            border_radius=4,
+            width=_ACTIVE_DOT_WIDTH if active else _DOT_HEIGHT,
+            height=_DOT_HEIGHT,
+            border_radius=_DOT_RADIUS,
             bgcolor=ft.Colors.PRIMARY
             if active
             else ft.Colors.with_opacity(tokens.OPACITY_LIGHT, ft.Colors.ON_SURFACE),
@@ -183,7 +199,7 @@ def OnboardingScreen() -> Control:
         )
 
     terms_row = ft.Row(
-        spacing=4,
+        spacing=tokens.SPACE_XS,
         alignment=ft.MainAxisAlignment.CENTER,
         vertical_alignment=ft.CrossAxisAlignment.CENTER,
         controls=[
@@ -223,7 +239,7 @@ def OnboardingScreen() -> Control:
             end=ft.Alignment.BOTTOM_CENTER,
             colors=[
                 ft.Colors.SURFACE,
-                ft.Colors.with_opacity(0.06, theme.PRIMARY),
+                ft.Colors.with_opacity(tokens.OPACITY_FAINT, theme.PRIMARY),
             ],
         ),
         content=ft.Column(
@@ -274,15 +290,15 @@ def OnboardingScreen() -> Control:
                                     "Get Started" if is_last else "Next",
                                     size=tokens.FONT_MD,
                                     weight=ft.FontWeight.W_600,
-                                    font_family="Outfit",
+                                    font_family=theme.FONT,
                                     color=ft.Colors.WHITE,
                                 ),
                                 icon=ft.Icons.CHECK_ROUNDED
                                 if is_last
                                 else ft.Icons.ARROW_FORWARD_ROUNDED,
                                 on_click=_on_next,
-                                width=220,
-                                height=52,
+                                width=tokens.CTA_BUTTON_WIDTH,
+                                height=tokens.CTA_BUTTON_HEIGHT,
                                 style=ft.ButtonStyle(
                                     shape=ft.RoundedRectangleBorder(radius=tokens.RADIUS_XL),
                                 ),

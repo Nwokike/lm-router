@@ -14,7 +14,6 @@ owner's KTV Player, which deliberately avoids reading the selection from
 
 from __future__ import annotations
 
-import pathlib
 from collections.abc import Callable
 
 import flet as ft
@@ -28,7 +27,9 @@ from core.catalog import (
     rate_hint_label,
 )
 
-_MAX_ATTACH_CHARS = 100_000
+# Longest model name shown on the strip pill before it is elided. The full
+# name still reaches the user through the pill's tooltip.
+_MODEL_LABEL_MAX_CHARS = 26
 
 
 def _pill(
@@ -38,25 +39,32 @@ def _pill(
     icon_control=None,
     active: bool = False,
     is_dark: bool = True,
+    tooltip: str | None = None,
 ) -> ft.Container:
     """A compact, tappable status pill.
 
     `icon` is an icon CODE (wrapped in ft.Icon); `icon_control` is an already
     built control such as a ProgressRing. Passing a control as `icon` raises
     "type 'Control' is not a subtype of type 'int?'" at render time.
+
+    `tooltip` carries the untruncated text when `label` has been shortened.
     """
     fg = theme.PRIMARY if active else theme.dim(is_dark)
     lead: list[ft.Control] = []
     if icon_control is not None:
         lead.append(icon_control)
     elif icon is not None:
-        lead.append(ft.Icon(icon, size=14, color=fg))
+        lead.append(ft.Icon(icon, size=tokens.ICON_XS, color=fg))
     return ft.Container(
-        padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+        padding=ft.Padding.symmetric(horizontal=tokens.SPACE_SNUG, vertical=tokens.SPACE_TIGHT),
         border_radius=tokens.RADIUS_PILL,
-        bgcolor=ft.Colors.with_opacity(0.12 if active else 0.06, theme.PRIMARY if active else fg),
+        bgcolor=ft.Colors.with_opacity(
+            tokens.OPACITY_MEDIUM if active else tokens.OPACITY_FAINT,
+            theme.PRIMARY if active else fg,
+        ),
+        tooltip=tooltip,
         content=ft.Row(
-            spacing=6,
+            spacing=tokens.SPACE_TIGHT,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
                 *lead,
@@ -70,7 +78,8 @@ def _pill(
                 ),
                 ft.Icon(
                     ft.Icons.EXPAND_MORE_ROUNDED,
-                    size=14,
+                    size=tokens.ICON_XS,
+                    # 0.7 has no token yet; see the missing-token list.
                     color=ft.Colors.with_opacity(0.7, fg),
                 ),
             ],
@@ -106,6 +115,13 @@ def ModelPicker(
     else:
         label = "Loading models…"
 
+    # The strip is a single scrollable row, so a long model name must not be
+    # allowed to shove Internet/MCP off-screen. Cap what is printed; the pill's
+    # tooltip still carries the full name.
+    pill_label = (
+        label if len(label) <= _MODEL_LABEL_MAX_CHARS else label[: _MODEL_LABEL_MAX_CHARS - 1] + "…"
+    )
+
     items: list[ft.PopupMenuItem] = []
     for model in models:
         model_id = str(model.get("id") or "")
@@ -117,14 +133,14 @@ def ModelPicker(
         items.append(
             ft.PopupMenuItem(
                 content=ft.Row(
-                    spacing=8,
+                    spacing=tokens.SPACE_SM,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=[
                         ft.Icon(
                             ft.Icons.AUTO_AWESOME_ROUNDED
                             if is_auto(model)
                             else ft.Icons.CHAT_BUBBLE_OUTLINE,
-                            size=15,
+                            size=tokens.ICON_XS,
                             color=theme.PRIMARY if selected else theme.dim(is_dark),
                         ),
                         ft.Column(
@@ -142,7 +158,7 @@ def ModelPicker(
                                 ),
                                 ft.Text(
                                     caption,
-                                    size=10,
+                                    size=tokens.FONT_2XS,
                                     color=theme.dim(is_dark),
                                     no_wrap=True,
                                     overflow=ft.TextOverflow.ELLIPSIS,
@@ -173,7 +189,7 @@ def ModelPicker(
         items.append(
             ft.PopupMenuItem(
                 content=ft.Column(
-                    spacing=2,
+                    spacing=tokens.SPACE_XXS,
                     tight=True,
                     controls=[
                         ft.Text(
@@ -185,7 +201,7 @@ def ModelPicker(
                             [
                                 ft.Text(
                                     action,
-                                    size=11,
+                                    size=tokens.FONT_XS,
                                     weight=ft.FontWeight.W_600,
                                     color=theme.PRIMARY,
                                 ),
@@ -204,17 +220,18 @@ def ModelPicker(
         )
 
     pill_icon = (
-        ft.ProgressRing(width=13, height=13, stroke_width=2)
+        ft.ProgressRing(width=tokens.ICON_XS, height=tokens.ICON_XS, stroke_width=2)
         if discovering
         else (ft.Icons.AUTO_AWESOME_ROUNDED if is_auto(current) else ft.Icons.SMART_TOY_OUTLINED)
     )
     return ft.PopupMenuButton(
         content=_pill(
-            label,
+            pill_label,
             icon_control=(pill_icon if discovering else None),
             icon=None if discovering else pill_icon,
             active=True,
             is_dark=is_dark,
+            tooltip=label,
         ),
         items=items,
         menu_position=ft.PopupMenuPosition.UNDER,
@@ -233,23 +250,23 @@ def SessionBar(
     model_pill = ModelPicker(state=state, methods=methods, is_dark=is_dark)
 
     search_pill = ft.Container(
-        padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+        padding=ft.Padding.symmetric(horizontal=tokens.SPACE_SNUG, vertical=tokens.SPACE_TIGHT),
         border_radius=tokens.RADIUS_PILL,
         bgcolor=ft.Colors.with_opacity(
-            0.12 if state.search_enabled else 0.06,
+            tokens.OPACITY_MEDIUM if state.search_enabled else tokens.OPACITY_FAINT,
             theme.PRIMARY if state.search_enabled else theme.dim(is_dark),
         ),
         on_click=lambda _: methods.toggle_search_tool(),
         tooltip="Toggle web search for this chat",
         content=ft.Row(
-            spacing=6,
+            spacing=tokens.SPACE_TIGHT,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
                 ft.Icon(
                     ft.Icons.PUBLIC_ROUNDED
                     if state.search_enabled
                     else ft.Icons.PUBLIC_OFF_ROUNDED,
-                    size=14,
+                    size=tokens.ICON_XS,
                     color=theme.PRIMARY if state.search_enabled else theme.dim(is_dark),
                 ),
                 ft.Text(
@@ -264,21 +281,21 @@ def SessionBar(
 
     mcp_count = len(state.mcp_tools)
     mcp_pill = ft.Container(
-        padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+        padding=ft.Padding.symmetric(horizontal=tokens.SPACE_SNUG, vertical=tokens.SPACE_TIGHT),
         border_radius=tokens.RADIUS_PILL,
         bgcolor=ft.Colors.with_opacity(
-            0.12 if mcp_count else 0.06,
+            tokens.OPACITY_MEDIUM if mcp_count else tokens.OPACITY_FAINT,
             theme.PRIMARY if mcp_count else theme.dim(is_dark),
         ),
         on_click=lambda _: methods.open_mcp_tools(),
         tooltip="MCP tools",
         content=ft.Row(
-            spacing=6,
+            spacing=tokens.SPACE_TIGHT,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
                 ft.Icon(
                     ft.Icons.HUB_ROUNDED if mcp_count else ft.Icons.HUB_OUTLINED,
-                    size=14,
+                    size=tokens.ICON_XS,
                     color=theme.PRIMARY if mcp_count else theme.dim(is_dark),
                 ),
                 ft.Text(
@@ -291,11 +308,17 @@ def SessionBar(
         ),
     )
 
+    # No width=float("inf") here on purpose: an unbounded width let a long model
+    # name claim the whole row and push the context readout off-screen. The
+    # caller constrains this container (expand=True) and the inner row scrolls
+    # horizontally once the pills no longer fit — the Sherlock chip-track
+    # pattern (wrap=False + ScrollMode.AUTO).
     return ft.Container(
-        width=float("inf"),
-        padding=ft.Padding.symmetric(horizontal=16, vertical=8),
+        padding=ft.Padding.symmetric(horizontal=tokens.SPACE_LG, vertical=tokens.SPACE_SM),
         content=ft.Row(
             spacing=tokens.SPACE_SM,
+            wrap=False,
+            scroll=ft.ScrollMode.AUTO,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[model_pill, search_pill, mcp_pill],
         ),
@@ -316,62 +339,11 @@ def Composer(
     """Message input. Draft state is local so typing never rebuilds the thread."""
     draft, set_draft = ft.use_state("")
 
-    # Text-file attachment: stdlib read, inlined as a fenced block. Size is
-    # capped so one file cannot eat the whole context window.
-    attachment, set_attachment = ft.use_state(None)
-
-    def _attach(_e: ft.ControlEvent) -> None:
-        page = getattr(ft.context, "page", None)
-        if page is None:
-            return
-
-        async def _pick() -> None:
-            picker = ft.FilePicker()
-            page.services.append(picker)
-            files = await picker.pick_files(
-                dialog_title="Attach a text file",
-                file_type=ft.FilePickerFileType.CUSTOM,
-                allowed_extensions=[
-                    "txt",
-                    "md",
-                    "py",
-                    "json",
-                    "csv",
-                    "log",
-                    "yaml",
-                    "yml",
-                    "html",
-                    "css",
-                    "js",
-                    "ts",
-                    "sh",
-                    "toml",
-                ],
-                allow_multiple=False,
-                with_data=True,
-            )
-            if not files:
-                return
-            picked = files[0]
-            raw = picked.bytes
-            if raw is None and picked.path:
-                raw = pathlib.Path(picked.path).read_bytes()
-            text = (raw or b"").decode("utf-8", errors="replace")
-            if len(text) > _MAX_ATTACH_CHARS:
-                text = text[:_MAX_ATTACH_CHARS] + "\n… (truncated)"
-            set_attachment((picked.name, text))
-
-        page.run_task(_pick)
-
     def submit() -> None:
         value = draft.strip()
-        if not value and not attachment:
+        if not value:
             return
-        if attachment:
-            name, text = attachment
-            value = f"[Attached file: {name}]\n\n```\n{text}\n```\n\n{value}".strip()
         set_draft("")
-        set_attachment(None)
         on_send(value)
 
     def on_change(e: ft.ControlEvent) -> None:
@@ -382,69 +354,47 @@ def Composer(
 
     # No Internet/MCP chips here on purpose: the SessionBar above the thread
     # already owns both. Duplicating them left the same controls on screen
-    # twice and made it unclear which one was live.
+    # twice and made it unclear which one was live. The Column that used to
+    # host the attachment chip is gone with the attach feature itself.
     return ft.Container(
-        padding=ft.Padding.symmetric(horizontal=16, vertical=10),
-        content=ft.Column(
-            spacing=tokens.SPACE_XS,
+        padding=ft.Padding.symmetric(horizontal=tokens.SPACE_LG, vertical=tokens.SPACE_SNUG),
+        content=ft.Row(
+            spacing=tokens.SPACE_SM,
             controls=[
-                *(
-                    [
-                        ft.Row(
-                            spacing=tokens.SPACE_SM,
-                            controls=[
-                                ft.Chip(
-                                    label=f"📄 {attachment[0]}",
-                                    on_delete=lambda _e: set_attachment(None),
-                                ),
-                            ],
-                        ),
-                    ]
-                    if attachment
-                    else []
+                ft.TextField(
+                    value=draft,
+                    hint_text="Message LM Router…",
+                    multiline=True,
+                    shift_enter=True,
+                    min_lines=1,
+                    max_lines=6,
+                    expand=True,
+                    text_size=tokens.FONT_MD,
+                    # TextField.border_radius is deprecated in flet 1.0;
+                    # the border object is the supported form.
+                    border=ft.OutlineInputBorder(
+                        border_radius=tokens.RADIUS_LG,
+                    ),
+                    on_change=on_change,
+                    on_submit=on_submit,
                 ),
-                ft.Row(
-                    spacing=tokens.SPACE_SM,
-                    controls=[
-                        ft.IconButton(
-                            ft.Icons.ATTACH_FILE_ROUNDED,
-                            tooltip="Attach a text file",
-                            on_click=_attach,
-                        ),
-                        ft.TextField(
-                            value=draft,
-                            hint_text="Message LM Router…",
-                            multiline=True,
-                            shift_enter=True,
-                            min_lines=1,
-                            max_lines=6,
-                            expand=True,
-                            text_size=tokens.FONT_MD,
-                            # TextField.border_radius is deprecated in flet 1.0;
-                            # the border object is the supported form.
-                            border=ft.OutlineInputBorder(
-                                border_radius=tokens.RADIUS_LG,
-                            ),
-                            on_change=on_change,
-                            on_submit=on_submit,
-                        ),
-                        (
-                            ft.FilledIconButton(
-                                ft.Icons.ARROW_UPWARD_ROUNDED,
-                                tooltip="Send",
-                                icon_size=20,
-                                disabled=busy,
-                                on_click=lambda _: submit(),
-                            )
-                            if not busy
-                            else ft.OutlinedIconButton(
-                                ft.Icons.STOP_ROUNDED,
-                                tooltip="Stop generating",
-                                icon_size=20,
-                                on_click=lambda _: on_stop(),
-                            )
-                        ),
-                    ],
+                (
+                    ft.FilledIconButton(
+                        ft.Icons.ARROW_UPWARD_ROUNDED,
+                        tooltip="Send",
+                        # 20 sits exactly between ICON_SM and ICON_MD;
+                        # no token fits without a visible size change.
+                        icon_size=20,
+                        disabled=busy,
+                        on_click=lambda _: submit(),
+                    )
+                    if not busy
+                    else ft.OutlinedIconButton(
+                        ft.Icons.STOP_ROUNDED,
+                        tooltip="Stop generating",
+                        icon_size=20,
+                        on_click=lambda _: on_stop(),
+                    )
                 ),
             ],
         ),

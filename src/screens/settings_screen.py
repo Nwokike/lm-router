@@ -70,6 +70,17 @@ def SettingsScreen():
             settings_card(rows),
         ]
 
+    def _pad(control: ft.Control) -> ft.Container:
+        """Inner inset for rows that do not go through setting_row.
+
+        Same 16/12 padding as every standard row, so bare rows line up with
+        the ones `setting_row` builds.
+        """
+        return ft.Container(
+            padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_MD, tokens.SPACE_LG, tokens.SPACE_MD),
+            content=control,
+        )
+
     def _theme_card(mode: str, label: str, icon: str) -> ft.Container:
         """One selectable theme option, mirroring Sherlock's card."""
         current = state.theme_mode or "system"
@@ -85,32 +96,41 @@ def SettingsScreen():
                     ft.Icon(
                         icon,
                         color=theme.PRIMARY if selected else ft.Colors.ON_SURFACE_VARIANT,
-                        size=18,
+                        size=tokens.ICON_SM,
                     ),
                     ft.Text(
                         label,
-                        size=12,
+                        size=tokens.FONT_SM,
                         weight=(ft.FontWeight.W_600 if selected else ft.FontWeight.NORMAL),
                         color=theme.PRIMARY if selected else ft.Colors.ON_SURFACE,
-                        font_family="Outfit",
+                        font_family=theme.FONT,
                     ),
                 ],
                 alignment=ft.MainAxisAlignment.CENTER,
-                spacing=6,
+                spacing=tokens.SPACE_TIGHT,
             ),
-            padding=ft.Padding(8, 8, 8, 8),
+            padding=ft.Padding(
+                tokens.SPACE_SM,
+                tokens.SPACE_SM,
+                tokens.SPACE_SM,
+                tokens.SPACE_SM,
+            ),
             border_radius=tokens.RADIUS_SM,
             border=ft.Border.all(
                 1.5 if selected else 1,
-                theme.PRIMARY if selected else ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE),
+                theme.PRIMARY
+                if selected
+                else ft.Colors.with_opacity(tokens.OPACITY_MEDIUM, ft.Colors.ON_SURFACE),
             ),
             bgcolor=(
-                ft.Colors.with_opacity(0.10, theme.PRIMARY) if selected else ft.Colors.TRANSPARENT
+                ft.Colors.with_opacity(tokens.OPACITY_TINT, theme.PRIMARY)
+                if selected
+                else ft.Colors.TRANSPARENT
             ),
             expand=True,
             ink=True,
             on_click=_select,
-            animate=ft.Animation(120, "easeOut"),
+            animate=ft.Animation(tokens.ANIM_FAST, "easeOut"),
         )
 
     def _save_gateway(_: object) -> None:
@@ -244,50 +264,74 @@ def SettingsScreen():
     appearance = _section(
         "Appearance",
         [
-            # Labelled block, then three explicit choices — the same structure
-            # Sherlock uses (icon + "App Theme" + subtitle, then the cards).
-            # A bare cycling icon left the user guessing which mode was active.
-            ft.Row(
-                spacing=tokens.SPACE_MD,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                controls=[
-                    ft.Container(
-                        content=ft.Icon(
-                            ft.Icons.COLOR_LENS_ROUNDED,
-                            size=tokens.ICON_MD,
-                            color=ft.Colors.ON_SURFACE_VARIANT,
+            # Sherlock's preferences pattern: a padded container wrapping the
+            # label row and the three theme cards. The bare Row had no padding,
+            # so it sat flush against the card edge and misaligned with every
+            # other setting row.
+            ft.Container(
+                padding=ft.Padding(
+                    tokens.SPACE_LG,
+                    tokens.SPACE_MD,
+                    tokens.SPACE_LG,
+                    tokens.SPACE_MD,
+                ),
+                content=ft.Column(
+                    spacing=tokens.SPACE_MD,
+                    controls=[
+                        ft.Row(
+                            spacing=tokens.SPACE_MD,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            controls=[
+                                ft.Container(
+                                    content=ft.Icon(
+                                        ft.Icons.COLOR_LENS_ROUNDED,
+                                        size=tokens.ICON_MD,
+                                        color=ft.Colors.ON_SURFACE_VARIANT,
+                                    ),
+                                    width=tokens.ICON_BACKDROP,
+                                    height=tokens.ICON_BACKDROP,
+                                    border_radius=tokens.ICON_BACKDROP_RADIUS,
+                                    bgcolor=ft.Colors.with_opacity(
+                                        tokens.OPACITY_LIGHT,
+                                        ft.Colors.ON_SURFACE,
+                                    ),
+                                    alignment=ft.Alignment.CENTER,
+                                ),
+                                ft.Column(
+                                    spacing=tokens.SPACE_XXS,
+                                    expand=True,
+                                    controls=[
+                                        ft.Text(
+                                            "App Theme",
+                                            size=tokens.FONT_MD,
+                                            weight=ft.FontWeight.W_500,
+                                        ),
+                                        ft.Text(
+                                            "Choose between Light, Dark, or System",
+                                            size=tokens.FONT_XS,
+                                            color=ft.Colors.with_opacity(
+                                                tokens.OPACITY_DIM,
+                                                ft.Colors.ON_SURFACE,
+                                            ),
+                                        ),
+                                    ],
+                                ),
+                            ],
                         ),
-                        width=36,
-                        height=36,
-                        border_radius=18,
-                        bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE),
-                        alignment=ft.Alignment.CENTER,
-                    ),
-                    ft.Column(
-                        controls=[
-                            ft.Text(
-                                "App Theme",
-                                size=tokens.FONT_MD,
-                                weight=ft.FontWeight.W_500,
-                            ),
-                            ft.Text(
-                                "Choose between Light, Dark, or System",
-                                size=tokens.FONT_XS,
-                                color=ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE),
-                            ),
-                        ],
-                        spacing=tokens.SPACE_XXS,
-                        expand=True,
-                    ),
-                ],
-            ),
-            ft.Row(
-                [
-                    _theme_card("light", "Light", ft.Icons.LIGHT_MODE_ROUNDED),
-                    _theme_card("dark", "Dark", ft.Icons.DARK_MODE_ROUNDED),
-                    _theme_card("system", "System", ft.Icons.SETTINGS_SYSTEM_DAYDREAM_ROUNDED),
-                ],
-                spacing=tokens.SPACE_SM,
+                        ft.Row(
+                            controls=[
+                                _theme_card("light", "Light", ft.Icons.LIGHT_MODE_ROUNDED),
+                                _theme_card("dark", "Dark", ft.Icons.DARK_MODE_ROUNDED),
+                                _theme_card(
+                                    "system",
+                                    "System",
+                                    ft.Icons.SETTINGS_SYSTEM_DAYDREAM_ROUNDED,
+                                ),
+                            ],
+                            spacing=tokens.SPACE_SM,
+                        ),
+                    ],
+                ),
             ),
         ],
     )
@@ -360,16 +404,20 @@ def SettingsScreen():
     prompt_card = _section(
         "System prompt",
         [
-            ft.TextField(
-                value=draft_prompt,
-                multiline=True,
-                min_lines=2,
-                max_lines=6,
-                text_size=13,
-                on_change=lambda e: set_draft_prompt(str(e.control.value or "")),
+            _pad(
+                ft.TextField(
+                    value=draft_prompt,
+                    multiline=True,
+                    min_lines=2,
+                    max_lines=6,
+                    text_size=tokens.FONT_BODY_SM,
+                    on_change=lambda e: set_draft_prompt(str(e.control.value or "")),
+                ),
             ),
-            ft.Row(
-                controls=[ft.FilledButton("Save prompt", on_click=_save_prompt)],
+            _pad(
+                ft.Row(
+                    controls=[ft.FilledButton("Save prompt", on_click=_save_prompt)],
+                ),
             ),
         ],
     )
@@ -380,7 +428,7 @@ def SettingsScreen():
             value=value,
             width=width,
             dense=True,
-            text_size=13,
+            text_size=tokens.FONT_BODY_SM,
             keyboard_type=ft.KeyboardType.NUMBER,
             on_change=lambda e, s=setter: s(str(e.control.value or "")),
         )
@@ -388,200 +436,245 @@ def SettingsScreen():
     generation_card = _section(
         "Generation",
         [
-            ft.Text(
-                "These go straight to kani as per-turn request parameters. "
-                "Defaults are tuned for volatile free models.",
-                size=11,
-                color=ft.Colors.ON_SURFACE_VARIANT,
+            _pad(
+                ft.Text(
+                    "These go straight to kani as per-turn request parameters. "
+                    "Defaults are tuned for volatile free models.",
+                    size=tokens.FONT_XS,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                ),
             ),
-            ft.Row(
-                spacing=8,
-                wrap=True,
-                controls=[
-                    _num_field("Temperature", gen_temperature, set_gen_temperature),
-                    _num_field("Max reply tokens", gen_max_tokens, set_gen_max_tokens),
-                ],
-            ),
-            ft.Row(
-                spacing=8,
-                wrap=True,
-                controls=[
-                    ft.Dropdown(
-                        label="Reasoning effort",
-                        value=gen_reasoning,
-                        width=170,
-                        text_size=13,
-                        options=[
-                            ft.DropdownOption(key=v, text=v)
-                            for v in ("auto", "minimal", "low", "medium", "high")
-                        ],
-                        on_select=lambda e: set_gen_reasoning(str(e.control.value or "auto")),
-                    ),
-                    ft.Switch(
-                        # ~15 tokens/turn. Stops the model guessing at "today".
-                        value=tell_time,
-                        active_color=ft.Colors.PRIMARY,
-                        on_change=lambda e: _set_tell_time(bool(e.control.value)),
-                    ),
-                    ft.Switch(
-                        value=gen_json_mode,
-                        active_color=ft.Colors.PRIMARY,
-                        on_change=lambda e: set_gen_json_mode(bool(e.control.value)),
-                    ),
-                ],
-            ),
-            ft.Container(
-                ink=True,
-                on_click=lambda _: set_gen_open(not gen_open),
-                content=ft.Row(
-                    spacing=6,
+            _pad(
+                ft.Row(
+                    spacing=tokens.SPACE_SM,
+                    wrap=True,
                     controls=[
-                        ft.Icon(
-                            ft.Icons.EXPAND_LESS_ROUNDED
-                            if gen_open
-                            else ft.Icons.EXPAND_MORE_ROUNDED,
-                            size=16,
-                        ),
-                        ft.Text("Advanced engine options", size=12, weight=ft.FontWeight.W_600),
+                        _num_field("Temperature", gen_temperature, set_gen_temperature),
+                        _num_field("Max reply tokens", gen_max_tokens, set_gen_max_tokens),
                     ],
+                ),
+            ),
+            _pad(
+                ft.Row(
+                    spacing=tokens.SPACE_SM,
+                    wrap=True,
+                    controls=[
+                        ft.Dropdown(
+                            label="Reasoning effort",
+                            value=gen_reasoning,
+                            width=170,
+                            text_size=tokens.FONT_BODY_SM,
+                            options=[
+                                ft.DropdownOption(key=v, text=v)
+                                for v in ("auto", "minimal", "low", "medium", "high")
+                            ],
+                            on_select=lambda e: set_gen_reasoning(str(e.control.value or "auto")),
+                        ),
+                        ft.Switch(
+                            # ~15 tokens/turn. Stops the model guessing at "today".
+                            value=tell_time,
+                            active_color=ft.Colors.PRIMARY,
+                            on_change=lambda e: _set_tell_time(bool(e.control.value)),
+                        ),
+                        ft.Switch(
+                            value=gen_json_mode,
+                            active_color=ft.Colors.PRIMARY,
+                            on_change=lambda e: set_gen_json_mode(bool(e.control.value)),
+                        ),
+                    ],
+                ),
+            ),
+            _pad(
+                ft.Container(
+                    ink=True,
+                    on_click=lambda _: set_gen_open(not gen_open),
+                    content=ft.Row(
+                        spacing=tokens.SPACE_TIGHT,
+                        controls=[
+                            ft.Icon(
+                                ft.Icons.EXPAND_LESS_ROUNDED
+                                if gen_open
+                                else ft.Icons.EXPAND_MORE_ROUNDED,
+                                size=tokens.ICON_XS,
+                            ),
+                            ft.Text(
+                                "Advanced engine options",
+                                size=tokens.FONT_SM,
+                                weight=ft.FontWeight.W_600,
+                            ),
+                        ],
+                    ),
                 ),
             ),
             *(
                 [
-                    ft.Row(
-                        spacing=8,
-                        wrap=True,
-                        controls=[
-                            _num_field("Top P", gen_top_p, set_gen_top_p),
-                            _num_field("Context window", gen_context, set_gen_context, width=170),
-                        ],
+                    _pad(
+                        ft.Row(
+                            spacing=tokens.SPACE_SM,
+                            wrap=True,
+                            controls=[
+                                _num_field("Top P", gen_top_p, set_gen_top_p),
+                                _num_field(
+                                    "Context window",
+                                    gen_context,
+                                    set_gen_context,
+                                    width=170,
+                                ),
+                            ],
+                        ),
                     ),
-                    ft.Row(
-                        spacing=8,
-                        wrap=True,
-                        controls=[
-                            _num_field("Presence penalty", gen_presence, set_gen_presence),
-                            _num_field("Frequency penalty", gen_frequency, set_gen_frequency),
-                        ],
+                    _pad(
+                        ft.Row(
+                            spacing=tokens.SPACE_SM,
+                            wrap=True,
+                            controls=[
+                                _num_field("Presence penalty", gen_presence, set_gen_presence),
+                                _num_field("Frequency penalty", gen_frequency, set_gen_frequency),
+                            ],
+                        ),
                     ),
-                    ft.Row(
-                        spacing=8,
-                        wrap=True,
-                        controls=[
-                            _num_field("Tool rounds", gen_tool_rounds, set_gen_tool_rounds),
-                            _num_field("Tool retries", gen_tool_retries, set_gen_tool_retries),
-                        ],
+                    _pad(
+                        ft.Row(
+                            spacing=tokens.SPACE_SM,
+                            wrap=True,
+                            controls=[
+                                _num_field("Tool rounds", gen_tool_rounds, set_gen_tool_rounds),
+                                _num_field("Tool retries", gen_tool_retries, set_gen_tool_retries),
+                            ],
+                        ),
                     ),
                 ]
                 if gen_open
                 else []
             ),
-            ft.Row(
-                controls=[ft.FilledButton("Save generation", on_click=_save_generation)],
+            _pad(
+                ft.Row(
+                    controls=[ft.FilledButton("Save generation", on_click=_save_generation)],
+                ),
             ),
         ],
     )
 
     provider_rows: list = [
         # Section header supplies the title; this row is the action.
-        ft.Row(
-            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            controls=[
-                ft.Text(
-                    "Route chat through another OpenAI-compatible endpoint",
-                    size=12,
-                    color=theme.dim(is_dark),
-                ),
-                ft.OutlinedButton(
-                    "+ Add",
-                    on_click=lambda _: set_provider_open(True),
-                ),
-            ],
+        _pad(
+            ft.Row(
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                controls=[
+                    ft.Text(
+                        "Route chat through another OpenAI-compatible endpoint",
+                        size=tokens.FONT_SM,
+                        color=theme.dim(is_dark),
+                    ),
+                    ft.OutlinedButton(
+                        "+ Add",
+                        on_click=lambda _: set_provider_open(True),
+                    ),
+                ],
+            ),
         ),
     ]
     for provider in settings.providers:
         is_active = provider.id == settings.active_provider_id
         provider_rows.append(
-            ft.Row(
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                controls=[
-                    ft.Column(
-                        spacing=2,
-                        tight=True,
-                        controls=[
-                            ft.Row(
-                                spacing=6,
-                                controls=[
-                                    ft.Text(provider.name, size=14),
-                                    *(
-                                        [ft.Text("active", size=11, color=ft.Colors.PRIMARY)]
-                                        if is_active
-                                        else []
-                                    ),
-                                ],
-                            ),
-                            ft.Text(
-                                str(provider.base_url),
-                                size=11,
-                                font_family="monospace",
-                                color=ft.Colors.ON_SURFACE_VARIANT,
-                            ),
-                        ],
-                    ),
-                    ft.Row(
-                        spacing=0,
-                        controls=[
-                            *(
-                                []
-                                if is_active
-                                else [
-                                    ft.TextButton(
-                                        "Use",
-                                        on_click=lambda e, pid=provider.id: methods.select_provider(
-                                            pid,
+            _pad(
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    controls=[
+                        ft.Column(
+                            spacing=tokens.SPACE_XXS,
+                            tight=True,
+                            controls=[
+                                ft.Row(
+                                    spacing=tokens.SPACE_TIGHT,
+                                    controls=[
+                                        ft.Text(provider.name, size=tokens.FONT_MD),
+                                        *(
+                                            [
+                                                ft.Text(
+                                                    "active",
+                                                    size=tokens.FONT_XS,
+                                                    color=ft.Colors.PRIMARY,
+                                                )
+                                            ]
+                                            if is_active
+                                            else []
                                         ),
+                                    ],
+                                ),
+                                ft.Text(
+                                    str(provider.base_url),
+                                    size=tokens.FONT_XS,
+                                    font_family="monospace",
+                                    color=ft.Colors.ON_SURFACE_VARIANT,
+                                ),
+                            ],
+                        ),
+                        ft.Row(
+                            spacing=0,
+                            controls=[
+                                *(
+                                    []
+                                    if is_active
+                                    else [
+                                        ft.TextButton(
+                                            "Use",
+                                            on_click=lambda e, pid=provider.id: (
+                                                methods.select_provider(pid)
+                                            ),
+                                        ),
+                                    ]
+                                ),
+                                ft.IconButton(
+                                    ft.Icons.DELETE_OUTLINE,
+                                    icon_size=tokens.ICON_SM,
+                                    tooltip="Remove",
+                                    on_click=lambda e, pid=provider.id: methods.remove_provider(
+                                        pid
                                     ),
-                                ]
-                            ),
-                            ft.IconButton(
-                                ft.Icons.DELETE_OUTLINE,
-                                icon_size=18,
-                                tooltip="Remove",
-                                on_click=lambda e, pid=provider.id: methods.remove_provider(pid),
-                            ),
-                        ],
-                    ),
-                ],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
             ),
         )
     if provider_open:
         provider_rows.extend(
             [
-                ft.TextField(
-                    label="Name",
-                    value=p_name,
-                    text_size=13,
-                    on_change=lambda e: set_p_name(str(e.control.value or "")),
+                _pad(
+                    ft.TextField(
+                        label="Name",
+                        value=p_name,
+                        text_size=tokens.FONT_BODY_SM,
+                        on_change=lambda e: set_p_name(str(e.control.value or "")),
+                    ),
                 ),
-                ft.TextField(
-                    label="Base URL (…/v1)",
-                    value=p_url,
-                    text_size=13,
-                    on_change=lambda e: set_p_url(str(e.control.value or "")),
+                _pad(
+                    ft.TextField(
+                        label="Base URL (…/v1)",
+                        value=p_url,
+                        text_size=tokens.FONT_BODY_SM,
+                        on_change=lambda e: set_p_url(str(e.control.value or "")),
+                    ),
                 ),
-                ft.TextField(
-                    label="API key (optional)",
-                    value=p_key,
-                    password=True,
-                    can_reveal_password=True,
-                    text_size=13,
-                    on_change=lambda e: set_p_key(str(e.control.value or "")),
+                _pad(
+                    ft.TextField(
+                        label="API key (optional)",
+                        value=p_key,
+                        password=True,
+                        can_reveal_password=True,
+                        text_size=tokens.FONT_BODY_SM,
+                        on_change=lambda e: set_p_key(str(e.control.value or "")),
+                    ),
                 ),
-                ft.Row(
-                    controls=[
-                        ft.FilledButton("Add provider", on_click=_add_provider),
-                        ft.TextButton("Cancel", on_click=lambda _: set_provider_open(False)),
-                    ],
+                _pad(
+                    ft.Row(
+                        controls=[
+                            ft.FilledButton("Add provider", on_click=_add_provider),
+                            ft.TextButton("Cancel", on_click=lambda _: set_provider_open(False)),
+                        ],
+                    ),
                 ),
             ],
         )
@@ -590,16 +683,18 @@ def SettingsScreen():
     mcp_rows: list = [
         # The section header already says "MCP servers"; this row is the
         # action, not a second title.
-        ft.Row(
-            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            controls=[
-                ft.Text(
-                    "Add a local or remote MCP server",
-                    size=12,
-                    color=theme.dim(is_dark),
-                ),
-                ft.OutlinedButton("+ Add", on_click=lambda _: set_mcp_open(True)),
-            ],
+        _pad(
+            ft.Row(
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                controls=[
+                    ft.Text(
+                        "Add a local or remote MCP server",
+                        size=tokens.FONT_SM,
+                        color=theme.dim(is_dark),
+                    ),
+                    ft.OutlinedButton("+ Add", on_click=lambda _: set_mcp_open(True)),
+                ],
+            ),
         ),
     ]
     for server in settings.mcp_servers:
@@ -620,7 +715,9 @@ def SettingsScreen():
                     if not invalid_schemas
                     else f"⚠ {len(tools)} tools ({len(invalid_schemas)} schema warning)"
                 )
-                test_controls.append(ft.Text(summary_text, size=12, color=summary_color))
+                test_controls.append(
+                    ft.Text(summary_text, size=tokens.FONT_SM, color=summary_color)
+                )
                 for t in tools:
                     t_name = t.get("name", "")
                     t_disabled = t_name in getattr(server, "disabled_tools", [])
@@ -630,18 +727,18 @@ def SettingsScreen():
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                             controls=[
                                 ft.Row(
-                                    spacing=4,
+                                    spacing=tokens.SPACE_XS,
                                     controls=[
                                         ft.Icon(
                                             ft.Icons.CHECK_CIRCLE_OUTLINE
                                             if t_valid
                                             else ft.Icons.WARNING_AMBER_ROUNDED,
-                                            size=14,
+                                            size=tokens.ICON_XS,
                                             color=ft.Colors.GREEN if t_valid else ft.Colors.AMBER,
                                         ),
                                         ft.Text(
                                             t_name,
-                                            size=12,
+                                            size=tokens.FONT_SM,
                                             weight=ft.FontWeight.W_500,
                                             color=ft.Colors.ON_SURFACE_VARIANT
                                             if not t_disabled
@@ -660,29 +757,31 @@ def SettingsScreen():
                     )
             else:
                 err_msg = result.get("message") or "Test failed."
-                test_controls.append(ft.Text(f"✗ {err_msg}", size=12, color=ft.Colors.ERROR))
+                test_controls.append(
+                    ft.Text(f"✗ {err_msg}", size=tokens.FONT_SM, color=ft.Colors.ERROR)
+                )
 
         mcp_rows.append(
             ft.Container(
-                padding=10,
+                padding=tokens.SPACE_SNUG,
                 border_radius=tokens.RADIUS_MD,
                 bgcolor=ft.Colors.SURFACE_CONTAINER_LOW
                 if hasattr(ft.Colors, "SURFACE_CONTAINER_LOW")
                 else ft.Colors.SURFACE,
                 content=ft.Column(
-                    spacing=4,
+                    spacing=tokens.SPACE_XS,
                     controls=[
                         ft.Row(
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                             controls=[
                                 ft.Column(
-                                    spacing=2,
+                                    spacing=tokens.SPACE_XXS,
                                     tight=True,
                                     controls=[
-                                        ft.Text(server.name, size=14),
+                                        ft.Text(server.name, size=tokens.FONT_MD),
                                         ft.Text(
                                             status_text,
-                                            size=11,
+                                            size=tokens.FONT_XS,
                                             color=ft.Colors.ON_SURFACE_VARIANT,
                                         ),
                                     ],
@@ -693,8 +792,8 @@ def SettingsScreen():
                                         *(
                                             [
                                                 ft.ProgressRing(
-                                                    width=14,
-                                                    height=14,
+                                                    width=tokens.ICON_XS,
+                                                    height=tokens.ICON_XS,
                                                     stroke_width=2,
                                                 )
                                             ]
@@ -716,7 +815,7 @@ def SettingsScreen():
                                         ),
                                         ft.IconButton(
                                             ft.Icons.DELETE_OUTLINE,
-                                            icon_size=18,
+                                            icon_size=tokens.ICON_SM,
                                             tooltip="Remove",
                                             on_click=lambda e, sid=server.id: (
                                                 methods.remove_mcp_server(sid)
@@ -734,39 +833,51 @@ def SettingsScreen():
     if mcp_open:
         mcp_rows.extend(
             [
-                ft.TextField(
-                    label="Name",
-                    value=m_name,
-                    text_size=13,
-                    on_change=lambda e: set_m_name(str(e.control.value or "")),
+                _pad(
+                    ft.TextField(
+                        label="Name",
+                        value=m_name,
+                        text_size=tokens.FONT_BODY_SM,
+                        on_change=lambda e: set_m_name(str(e.control.value or "")),
+                    ),
                 ),
-                ft.Dropdown(
-                    label="Transport",
-                    value=m_transport,
-                    options=[
-                        ft.DropdownOption(key=t, text=t)
-                        for t in ["streamable_http", "sse", "stdio"]
-                    ],
-                    text_size=13,
-                    on_select=lambda e: set_m_transport(str(e.control.value or "streamable_http")),
+                _pad(
+                    ft.Dropdown(
+                        label="Transport",
+                        value=m_transport,
+                        options=[
+                            ft.DropdownOption(key=t, text=t)
+                            for t in ["streamable_http", "sse", "stdio"]
+                        ],
+                        text_size=tokens.FONT_BODY_SM,
+                        on_select=lambda e: set_m_transport(
+                            str(e.control.value or "streamable_http")
+                        ),
+                    ),
                 ),
-                ft.TextField(
-                    label="Command (stdio) or URL (remote)",
-                    value=m_target,
-                    text_size=13,
-                    on_change=lambda e: set_m_target(str(e.control.value or "")),
+                _pad(
+                    ft.TextField(
+                        label="Command (stdio) or URL (remote)",
+                        value=m_target,
+                        text_size=tokens.FONT_BODY_SM,
+                        on_change=lambda e: set_m_target(str(e.control.value or "")),
+                    ),
                 ),
-                ft.TextField(
-                    label="Headers JSON (optional)",
-                    value=m_headers,
-                    text_size=13,
-                    on_change=lambda e: set_m_headers(str(e.control.value or "")),
+                _pad(
+                    ft.TextField(
+                        label="Headers JSON (optional)",
+                        value=m_headers,
+                        text_size=tokens.FONT_BODY_SM,
+                        on_change=lambda e: set_m_headers(str(e.control.value or "")),
+                    ),
                 ),
-                ft.Row(
-                    controls=[
-                        ft.FilledButton("Add server", on_click=_add_mcp),
-                        ft.TextButton("Cancel", on_click=lambda _: set_mcp_open(False)),
-                    ],
+                _pad(
+                    ft.Row(
+                        controls=[
+                            ft.FilledButton("Add server", on_click=_add_mcp),
+                            ft.TextButton("Cancel", on_click=lambda _: set_mcp_open(False)),
+                        ],
+                    ),
                 ),
             ],
         )
@@ -796,72 +907,78 @@ def SettingsScreen():
     # licence line, which the owner asked to drop. Buttons are centred too, so
     # the card reads as one block instead of a left-aligned outlier.
     about_rows: list = [
-        ft.Column(
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            spacing=0,
-            controls=[
-                ft.Image(
-                    src="/icon.svg",
-                    width=48,
-                    height=48,
-                    color=ft.Colors.WHITE if is_dark else None,
-                ),
-                ft.Container(height=tokens.SPACE_SM),
-                ft.Text(
-                    constants.APP_NAME,
-                    size=tokens.FONT_LG,
-                    weight=ft.FontWeight.W_700,
-                    color=ft.Colors.ON_SURFACE,
-                ),
-                ft.Container(
-                    content=ft.Text(
-                        f"Version {constants.APP_VERSION} (Build {constants.BUILD_NUMBER})",
+        _pad(
+            ft.Column(
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=0,
+                controls=[
+                    ft.Image(
+                        src="/icon.svg",
+                        width=tokens.ICON_EMPTY,
+                        height=tokens.ICON_EMPTY,
+                        color=ft.Colors.WHITE if is_dark else None,
+                    ),
+                    ft.Container(height=tokens.SPACE_SM),
+                    ft.Text(
+                        constants.APP_NAME,
+                        size=tokens.FONT_LG,
+                        weight=ft.FontWeight.W_700,
+                        color=ft.Colors.ON_SURFACE,
+                    ),
+                    ft.Container(
+                        content=ft.Text(
+                            f"Version {constants.APP_VERSION} (Build {constants.BUILD_NUMBER})",
+                            size=tokens.FONT_SM,
+                            color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
+                        ),
+                        ink=True,
+                        tooltip="Tap to check for updates",
+                        on_click=lambda _: methods.check_update(),
+                    ),
+                    ft.Container(height=tokens.SPACE_XS),
+                    ft.Text(
+                        "Your own Kiri Router gateway, running on-device.\n"
+                        "No account, no API key, no credits.",
                         size=tokens.FONT_SM,
                         color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
+                        text_align=ft.TextAlign.CENTER,
                     ),
-                    ink=True,
-                    tooltip="Tap to check for updates",
-                    on_click=lambda _: methods.check_update(),
-                ),
-                ft.Container(height=tokens.SPACE_XS),
-                ft.Text(
-                    "Your own Kiri Router gateway, running on-device.\n"
-                    "No account, no API key, no credits.",
-                    size=tokens.FONT_SM,
-                    color=ft.Colors.with_opacity(tokens.OPACITY_DIM, ft.Colors.ON_SURFACE),
-                    text_align=ft.TextAlign.CENTER,
-                ),
-            ],
+                ],
+            ),
         ),
-        ft.Row(
-            alignment=ft.MainAxisAlignment.CENTER,
-            spacing=tokens.SPACE_SM,
-            controls=[
-                ft.FilledButton(
-                    "Check for updates",
-                    icon=ft.Icons.CLOUD_DOWNLOAD_ROUNDED,
-                    on_click=lambda _: methods.check_update(),
-                ),
-                *(
-                    [
-                        ft.OutlinedButton(
-                            "View update",
-                            on_click=lambda _: methods.open_update_dialog(),
-                        ),
-                    ]
-                    if state.update_info
-                    else []
-                ),
-            ],
+        _pad(
+            ft.Row(
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=tokens.SPACE_SM,
+                controls=[
+                    ft.FilledButton(
+                        "Check for updates",
+                        icon=ft.Icons.CLOUD_DOWNLOAD_ROUNDED,
+                        on_click=lambda _: methods.check_update(),
+                    ),
+                    *(
+                        [
+                            ft.OutlinedButton(
+                                "View update",
+                                on_click=lambda _: methods.open_update_dialog(),
+                            ),
+                        ]
+                        if state.update_info
+                        else []
+                    ),
+                ],
+            ),
         ),
     ]
     if page is not None:
         try:
             if page.platform.is_desktop():
                 about_rows.append(
-                    ft.Row(
-                        alignment=ft.MainAxisAlignment.CENTER,
-                        controls=[ft.TextButton("Quit", on_click=lambda _: methods.quit_app())],
+                    _pad(
+                        ft.Row(
+                            alignment=ft.MainAxisAlignment.CENTER,
+                            controls=[ft.TextButton("Quit", on_click=lambda _: methods.quit_app())],
+                        ),
                     ),
                 )
         except Exception as exc:
@@ -886,7 +1003,8 @@ def SettingsScreen():
             build_banner_ad(),
             *search_card,
             *about_card,
-            build_banner_ad(),
+            # No banner at the floor: the owner banned them there. The spacer
+            # stays last.
             ft.Container(height=tokens.SPACE_XXXL),
         ],
     )

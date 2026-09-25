@@ -17,8 +17,8 @@ import flet as ft
 from core import theme, tokens
 from core.logging import records
 
-_DIALOG_WIDTH = 560
-_DIALOG_HEIGHT = 420
+_DIALOG_WIDTH = tokens.DIALOG_WIDTH_XL
+_DIALOG_HEIGHT = tokens.DIALOG_HEIGHT_MD
 _MAX_LINES = 500
 
 
@@ -52,7 +52,7 @@ def build_log_terminal(
                 ft.IconButton(
                     icon=ft.Icons.COPY_ROUNDED,
                     tooltip="Copy the whole log",
-                    icon_size=18,
+                    icon_size=tokens.ICON_SM,
                     icon_color=theme.PRIMARY,
                     on_click=lambda _e: methods.copy_logs(),
                 ),
@@ -61,10 +61,10 @@ def build_log_terminal(
         content=ft.Container(
             width=_DIALOG_WIDTH,
             height=_DIALOG_HEIGHT,
-            bgcolor="#101418",
+            bgcolor=theme.TERMINAL_BG,
             border=ft.Border.all(
                 1,
-                ft.Colors.with_opacity(0.12, ft.Colors.WHITE),
+                ft.Colors.with_opacity(tokens.OPACITY_MEDIUM, ft.Colors.WHITE),
             ),
             border_radius=tokens.RADIUS_MD,
             padding=tokens.SPACE_MD,
@@ -76,8 +76,8 @@ def build_log_terminal(
                         body,
                         selectable=True,
                         font_family="monospace",
-                        size=12,
-                        color="#D7DEE7",
+                        size=tokens.FONT_SM,
+                        color=theme.TERMINAL_FG,
                     ),
                 ],
                 scroll=ft.ScrollMode.AUTO,

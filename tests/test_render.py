@@ -191,10 +191,14 @@ def test_chat_banners_scroll_with_messages_and_skip_empty_conversations(_rendere
         assert message_list.auto_scroll is True
 
         message_rows = message_list.controls
+        # A banner must never be the last row: the owner bans floor banners
+        # ("remove that banner at the floor"), so the reply after the final
+        # message gets no banner.
+        last_reply_index = len(state.messages) - 1
         expected_banner_positions = [
             2 * reply_index + 1
             for reply_index in range(len(state.messages))
-            if (reply_index + 1) % BANNER_AD_EVERY_N_REPLIES == 0
+            if (reply_index + 1) % BANNER_AD_EVERY_N_REPLIES == 0 and reply_index < last_reply_index
         ]
         actual_banner_positions = [
             index for index, row in enumerate(message_rows) if isinstance(row, ft.Row)

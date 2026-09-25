@@ -48,7 +48,7 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
             unit_id=constants.AD_BANNER_UNIT_ID_ANDROID,
             width=320,
             height=50,
-            on_load=lambda e: LOG.info("ads: banner loaded"),
+            on_load=lambda e: LOG.debug("ads: banner loaded"),
             on_error=lambda e: LOG.warning("ads: banner load error: %s", getattr(e, "data", e)),
         )
     except Exception as exc:

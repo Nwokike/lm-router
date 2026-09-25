@@ -59,7 +59,6 @@ class AppController:
         self._share: ShareSession | None = None
         self._tunnel: LocalTunnel | None = None
         self._share_url = ""
-        self._share_error = ""
         # flet page context captured at init: chat callbacks run on the anyio
         # portal thread, which has no context of its own (kani thread study).
         self._flet_ctx = contextvars.copy_context()
@@ -95,6 +94,10 @@ class AppController:
         load_warnings = pop_load_warnings()
         if load_warnings:
             state.notice = "; ".join(load_warnings)
+        # KTV/Sherlock/DDGS all zero the page chrome: insets come from
+        # ft.SafeArea in the shell, never from implicit page padding.
+        page.padding = 0
+        page.spacing = 0
         page.theme = theme.get_light_theme()
         page.dark_theme = theme.get_dark_theme()
         page.theme_mode = THEME_MODES.get(settings.theme, ft.ThemeMode.SYSTEM)
@@ -863,17 +866,33 @@ class AppController:
         if self._share is not None:
             self._stop_share()
             return
+        # The tunnel claim retries for up to 30s. Without this guard a second
+        # click in that window starts a SECOND proxy and the owner sees two
+        # log lines and one seemingly dead button.
+        if state.share_starting:
+            LOG.warning("share start ignored: already in flight")
+            return
 
         key = self.settings.share_key if self.settings.require_share_key else ""
         if self.settings.require_share_key and not key:
             self.settings.share_key = key = generate_key()
             self.settings.save()
 
+        def _mark_starting() -> None:
+            state.share_starting = True
+            state.share_error = ""
+
+        self._in_flet_ctx(_mark_starting)()
+
         def work() -> None:
+            def _mark_done() -> None:
+                state.share_starting = False
+
             port = self.services.engine.port or state.gateway_port
             session = ShareSession(port, key=key)
             if not session.start_proxy():
-                self._in_flet_ctx(self._notify_error)(
+                self._in_flet_ctx(_mark_done)()
+                self._in_flet_ctx(self._set_share_error)(
                     "Could not start the local share proxy. Another app may hold the port."
                 )
                 return
@@ -884,18 +903,36 @@ class AppController:
                 url = tunnel.start()
             except Exception as exc:
                 session.stop()
+                self._in_flet_ctx(_mark_done)()
                 self._in_flet_ctx(self._set_share_error)(
                     f"Could not open a tunnel: {str(exc)[:160]}"
                 )
                 return
 
             def done() -> None:
-                self._share = session
-                self._tunnel = tunnel
-                self._share_url = url
-                self._share_error = ""
-                state.share_url = url
-                LOG.info("sharing gateway at %s (auth=%s)", url, bool(key))
+                # done() runs on the Flet loop from inside a worker thread.
+                # Anything raised here used to die with the thread, so the
+                # button read as dead and the log card stayed empty.
+                try:
+                    self._share = session
+                    self._tunnel = tunnel
+                    self._share_url = url
+                    state.share_url = url
+                    state.share_error = ""
+                    state.share_starting = False
+                    LOG.info("sharing gateway at %s (auth=%s)", url, bool(key))
+                except Exception as exc:
+                    LOG.error("share state update failed: %s", exc, exc_info=True)
+                    tunnel.stop()
+                    session.stop()
+                    self._share = None
+                    self._tunnel = None
+                    self._share_url = ""
+                    state.share_url = ""
+                    state.share_starting = False
+                    self._notify_error(
+                        f"Sharing started but could not be shown in the UI: {str(exc)[:160]}"
+                    )
 
             self._in_flet_ctx(done)()
 
@@ -906,6 +943,7 @@ class AppController:
         tunnel, self._tunnel = self._tunnel, None
         self._share_url = ""
         state.share_url = ""
+        state.share_starting = False
         if tunnel is not None:
             tunnel.stop()
         if session is not None:
@@ -913,7 +951,7 @@ class AppController:
         LOG.info("sharing stopped")
 
     def _set_share_error(self, message: str) -> None:
-        self._share_error = message
+        state.share_error = message
         self._notify_error(message)
 
     def _open_console(self) -> None:

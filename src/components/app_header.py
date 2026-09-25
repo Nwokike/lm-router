@@ -41,19 +41,24 @@ def AppHeader(
         ft.Container(
             content=ft.Image(
                 src="/icon.svg",
-                width=32,
-                height=32,
+                width=tokens.LOGO_SIZE,
+                height=tokens.LOGO_SIZE,
                 color=ft.Colors.WHITE if is_dark else None,
                 fit=ft.BoxFit.CONTAIN,
             ),
-            width=32,
-            height=32,
+            width=tokens.LOGO_SIZE,
+            height=tokens.LOGO_SIZE,
             alignment=ft.Alignment.CENTER,
         ),
     ]
     if title:
         title_controls: list = [
-            ft.Text(title, size=tokens.FONT_LG, weight=ft.FontWeight.BOLD, font_family="Outfit"),
+            ft.Text(
+                title,
+                size=tokens.FONT_LG,
+                weight=ft.FontWeight.BOLD,
+                font_family=theme.FONT,
+            ),
         ]
         if subtitle:
             title_controls.append(
@@ -61,7 +66,7 @@ def AppHeader(
                     subtitle,
                     size=tokens.FONT_XS,
                     color=ft.Colors.ON_SURFACE_VARIANT,
-                    font_family="Outfit",
+                    font_family=theme.FONT,
                 ),
             )
         left.append(ft.Column(controls=title_controls, spacing=tokens.SPACE_XXS, tight=True))
@@ -72,27 +77,32 @@ def AppHeader(
         right.append(
             ft.Container(
                 content=ft.Row(
-                    spacing=6,
+                    spacing=tokens.SPACE_TIGHT,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=[
                         ft.Text(
                             f"Update: {update_version}",
-                            size=11,
+                            size=tokens.FONT_XS,
                             weight=ft.FontWeight.BOLD,
                             color=ft.Colors.PRIMARY,
                             no_wrap=True,
                         ),
                         ft.Container(
-                            width=6,
-                            height=6,
-                            border_radius=3,
+                            width=tokens.DOT_SIZE,
+                            height=tokens.DOT_SIZE,
+                            border_radius=tokens.DOT_RADIUS,
                             bgcolor=ft.Colors.PRIMARY,
                         ),
                     ],
                 ),
-                padding=ft.Padding(10, 4, 10, 4),
-                border_radius=10,
-                bgcolor=ft.Colors.with_opacity(0.15, ft.Colors.PRIMARY),
+                padding=ft.Padding(
+                    tokens.SPACE_SNUG,
+                    tokens.SPACE_XS,
+                    tokens.SPACE_SNUG,
+                    tokens.SPACE_XS,
+                ),
+                border_radius=tokens.RADIUS_CHIP,
+                bgcolor=ft.Colors.with_opacity(tokens.OPACITY_STRONG, ft.Colors.PRIMARY),
                 border=ft.Border.all(1.5, ft.Colors.PRIMARY),
                 ink=True,
                 tooltip="New update available",
@@ -104,14 +114,19 @@ def AppHeader(
             ft.Container(
                 content=ft.Text(
                     f"v{constants.APP_VERSION}",
-                    size=11,
+                    size=tokens.FONT_XS,
                     weight=ft.FontWeight.BOLD,
                     color=ft.Colors.ON_SURFACE_VARIANT,
                     no_wrap=True,
                 ),
-                padding=ft.Padding(10, 4, 10, 4),
-                border_radius=10,
-                bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE_VARIANT),
+                padding=ft.Padding(
+                    tokens.SPACE_SNUG,
+                    tokens.SPACE_XS,
+                    tokens.SPACE_SNUG,
+                    tokens.SPACE_XS,
+                ),
+                border_radius=tokens.RADIUS_CHIP,
+                bgcolor=ft.Colors.with_opacity(tokens.OPACITY_LIGHT, ft.Colors.ON_SURFACE_VARIANT),
                 tooltip=f"{constants.APP_NAME} {constants.APP_VERSION} — tap for details",
                 # Only Container is tappable in flet 1.0; this chip used to be
                 # inert, so tapping the version did nothing at all.
@@ -151,21 +166,29 @@ def AppHeader(
         )
 
     return ft.Container(
-        padding=ft.Padding(tokens.SPACE_XL, tokens.SPACE_SM, tokens.SPACE_XL, tokens.SPACE_SM),
+        padding=ft.Padding(
+            tokens.SPACE_LG,
+            tokens.SPACE_SM,
+            tokens.SPACE_LG,
+            tokens.SPACE_SM,
+        ),
         content=ft.Row(
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
                 ft.Row(
                     left,
-                    spacing=tokens.SPACE_SM,
+                    spacing=tokens.SPACE_XS,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
                 ft.Row(
                     right,
-                    spacing=tokens.SPACE_XS,
+                    spacing=tokens.SPACE_XXS,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
             ],
+            # Owner: header must scroll horizontally when extra action
+            # buttons make it overflow narrow screens (instead of clipping).
+            scroll=ft.ScrollMode.AUTO,
         ),
     )

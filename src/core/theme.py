@@ -36,6 +36,10 @@ SUCCESS = "#2E7D32"
 WARNING = "#F9A825"
 ERROR = "#D32F2F"
 
+# Terminal dialog chrome: always the dark console, in both themes.
+TERMINAL_BG = "#101418"
+TERMINAL_FG = "#D7DEE7"
+
 # Served from the assets_dir root. Flet 1.0 accepts .ttf/.ttc/.otf or an
 # absolute URL; a .css value is ignored and the app falls back to the system
 # font, so the binary is referenced directly.
@@ -50,6 +54,14 @@ def get_light_theme() -> ft.Theme:
         scaffold_bgcolor=LIGHT_BG,
         canvas_color=LIGHT_BG,
         card_bgcolor=LIGHT_SURFACE,
+        # KTV Player's nav values, house palette: no height override, so
+        # Material owns the bar size; labels show for the selected tab only.
+        navigation_bar_theme=ft.NavigationBarTheme(
+            bgcolor=LIGHT_SURFACE,
+            indicator_color=PRIMARY,
+            elevation=4.0,
+            label_behavior=ft.NavigationBarLabelBehavior.ONLY_SHOW_SELECTED,
+        ),
     )
 
 
@@ -61,6 +73,12 @@ def get_dark_theme() -> ft.Theme:
         scaffold_bgcolor=DARK_BG,
         canvas_color=DARK_BG_ALT,
         card_bgcolor=DARK_SURFACE,
+        navigation_bar_theme=ft.NavigationBarTheme(
+            bgcolor=DARK_SURFACE,
+            indicator_color=PRIMARY,
+            elevation=4.0,
+            label_behavior=ft.NavigationBarLabelBehavior.ONLY_SHOW_SELECTED,
+        ),
     )
 
 

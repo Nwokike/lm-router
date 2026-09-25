@@ -79,7 +79,6 @@
 
 - **Streaming Chat** — token-by-token replies with markdown tables and code highlighting, visible reasoning blocks, expandable tool calls, and per-message token usage.
 - **Regenerate & Edit** — long-press or right-click any message to copy it, re-run the last reply, or edit-and-resend the last question.
-- **File Attachments** — attach text and code files (.py, .md, .json, .csv …) and send them inline as a fenced block.
 - **Server Console** — gateway status, start/stop, live logs with level filters, refresh model catalog, and the full catalog with per-model rate limits and endpoint types.
 - **Settings** — theme, generation parameters, gateway port and autostart, providers, MCP servers, search toggle, About.
 - **Onboarding** — terms gate and consent flow before first use.

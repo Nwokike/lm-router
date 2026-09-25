@@ -51,16 +51,19 @@ def ThinkingBlock(
         # Only Container carries an on_click in flet 1.0; Row/Column do not.
         ink=True,
         border_radius=tokens.RADIUS_SM,
-        padding=ft.Padding.symmetric(horizontal=4, vertical=2),
+        padding=ft.Padding.symmetric(
+            horizontal=tokens.SPACE_XS,
+            vertical=tokens.SPACE_XXS,
+        ),
         on_click=lambda _: set_open(not open_),
         content=ft.Row(
-            spacing=6,
+            spacing=tokens.SPACE_TIGHT,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
-                ft.Icon(_caret(open_), size=16, color=theme.dim(is_dark)),
+                ft.Icon(_caret(open_), size=tokens.ICON_XS, color=theme.dim(is_dark)),
                 ft.Icon(
                     ft.Icons.PSYCHOLOGY_ROUNDED,
-                    size=15,
+                    size=tokens.ICON_XS,
                     color=theme.PRIMARY if streaming else theme.dim(is_dark),
                 ),
                 ft.Text(
@@ -77,21 +80,31 @@ def ThinkingBlock(
     if open_:
         body.append(
             ft.Container(
-                padding=ft.Padding.only(left=10, top=4, bottom=4),
-                margin=ft.Margin.only(top=2),
+                padding=ft.Padding.only(
+                    left=tokens.SPACE_SNUG,
+                    top=tokens.SPACE_XS,
+                    bottom=tokens.SPACE_XS,
+                ),
+                margin=ft.Margin.only(top=tokens.SPACE_XXS),
                 border=ft.Border.only(
-                    left=ft.BorderSide(2, ft.Colors.with_opacity(0.35, theme.PRIMARY)),
+                    left=ft.BorderSide(
+                        2,
+                        ft.Colors.with_opacity(tokens.OPACITY_EMPHASIS, theme.PRIMARY),
+                    ),
                 ),
                 content=theme.markdown(reasoning, is_dark=is_dark),
             ),
         )
 
     return ft.Container(
-        padding=ft.Padding.symmetric(horizontal=2, vertical=2),
-        bgcolor=theme.glass(is_dark, 0.04),
+        padding=ft.Padding.symmetric(
+            horizontal=tokens.SPACE_XXS,
+            vertical=tokens.SPACE_XXS,
+        ),
+        bgcolor=theme.glass(is_dark, tokens.OPACITY_SUBTLE),
         border_radius=tokens.RADIUS_MD,
         on_click=None,
-        content=ft.Column(spacing=2, tight=True, controls=body),
+        content=ft.Column(spacing=tokens.SPACE_XXS, tight=True, controls=body),
     )
 
 
@@ -110,16 +123,19 @@ def ToolCallBlock(
     header = ft.Container(
         ink=True,
         border_radius=tokens.RADIUS_SM,
-        padding=ft.Padding.symmetric(horizontal=2, vertical=2),
+        padding=ft.Padding.symmetric(
+            horizontal=tokens.SPACE_XXS,
+            vertical=tokens.SPACE_XXS,
+        ),
         on_click=lambda _: set_open(not open_),
         content=ft.Row(
-            spacing=6,
+            spacing=tokens.SPACE_TIGHT,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
-                ft.Icon(_caret(open_), size=14, color=theme.dim(is_dark)),
+                ft.Icon(_caret(open_), size=tokens.ICON_XS, color=theme.dim(is_dark)),
                 ft.Icon(
                     ft.Icons.SEARCH_ROUNDED if "search" in name.lower() else ft.Icons.BUILD_ROUNDED,
-                    size=15,
+                    size=tokens.ICON_XS,
                     color=status_color,
                 ),
                 ft.Text(
@@ -133,7 +149,7 @@ def ToolCallBlock(
                 ),
                 ft.Text(
                     "error" if is_error else "done",
-                    size=10,
+                    size=tokens.FONT_2XS,
                     color=theme.dim(is_dark),
                 ),
             ],
@@ -144,13 +160,16 @@ def ToolCallBlock(
     if open_:
         body.append(
             ft.Container(
-                padding=ft.Margin.only(top=4),
+                padding=ft.Margin.only(top=tokens.SPACE_XS),
                 content=theme.markdown(content or "_No output._", is_dark=is_dark),
             ),
         )
 
     return ft.Container(
-        padding=ft.Padding.symmetric(horizontal=10, vertical=8),
+        padding=ft.Padding.symmetric(
+            horizontal=tokens.SPACE_SNUG,
+            vertical=tokens.SPACE_SM,
+        ),
         bgcolor=theme.surface_2(is_dark),
         border_radius=tokens.RADIUS_MD,
         border=ft.Border.all(1, theme.border(is_dark)),

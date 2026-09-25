@@ -108,7 +108,7 @@ class LocalTunnel:
                 return data
             except Exception as exc:
                 last = exc
-                LOG.debug("tunnel claim failed, retrying: %s", exc)
+                LOG.warning("tunnel claim failed, retrying: %s", exc)
                 time.sleep(1.5)
         raise TunnelError(f"Could not reach the tunnel service: {last}")
 
@@ -130,7 +130,7 @@ class LocalTunnel:
             except Exception as exc:
                 if self._stop.is_set():
                     return
-                LOG.debug("tunnel conn %s dropped: %s", index, exc)
+                LOG.warning("tunnel conn %s dropped: %s", index, exc)
                 if self._on_error is not None:
                     self._on_error(f"Tunnel connection dropped: {exc}")
                 self._stop.wait(backoff)

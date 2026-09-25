@@ -28,7 +28,7 @@ class AdService:
 
     @property
     def interstitial_id(self) -> str:
-        # USE_TEST_IDS=True ships Google test units; swap in prod ids at release.
+        # Production unit; CI hard-fails if a Google test ID ever lands here.
         return constants.AD_INTERSTITIAL_UNIT_ID_ANDROID
 
     def __init__(self, page: ft.Page) -> None:

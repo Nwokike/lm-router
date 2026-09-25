@@ -2,7 +2,6 @@
 
 import flet as ft
 
-from components.banner_ad import build_banner_ad
 from core import tokens
 from core.state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
@@ -29,7 +28,7 @@ def HistoryScreen():
 
         rows.append(
             ft.Container(
-                padding=12,
+                padding=tokens.SPACE_MD,
                 border_radius=tokens.RADIUS_MD,
                 bgcolor=ft.Colors.SURFACE_CONTAINER,
                 content=ft.Row(
@@ -37,25 +36,25 @@ def HistoryScreen():
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=[
                         ft.Column(
-                            spacing=2,
+                            spacing=tokens.SPACE_XXS,
                             tight=True,
                             expand=True,
                             controls=[
                                 ft.Text(
                                     conversation.get("title", "Untitled"),
-                                    size=14,
+                                    size=tokens.FONT_MD,
                                     max_lines=1,
                                     overflow=ft.TextOverflow.ELLIPSIS,
                                 ),
                                 ft.Text(
                                     time_display,
-                                    size=11,
+                                    size=tokens.FONT_XS,
                                     color=ft.Colors.ON_SURFACE_VARIANT,
                                 ),
                             ],
                         ),
                         ft.Row(
-                            spacing=4,
+                            spacing=tokens.SPACE_XS,
                             controls=[
                                 ft.TextButton(
                                     "Open",
@@ -63,13 +62,13 @@ def HistoryScreen():
                                 ),
                                 ft.IconButton(
                                     ft.Icons.IOS_SHARE,
-                                    icon_size=18,
+                                    icon_size=tokens.ICON_SM,
                                     tooltip="Export Markdown",
                                     on_click=lambda e, c=cid: methods.export_conversation(c),
                                 ),
                                 ft.IconButton(
                                     ft.Icons.DELETE_OUTLINE,
-                                    icon_size=18,
+                                    icon_size=tokens.ICON_SM,
                                     tooltip="Delete",
                                     on_click=lambda e, c=cid: methods.delete_conversation(c),
                                 ),
@@ -89,19 +88,19 @@ def HistoryScreen():
         rows.append(
             ft.Container(
                 alignment=ft.Alignment.CENTER,
-                padding=24,
+                padding=tokens.SPACE_XL,
                 content=ft.Column(
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=8,
+                    spacing=tokens.SPACE_SM,
                     controls=[
                         ft.Icon(
                             ft.Icons.HISTORY_ROUNDED,
-                            size=40,
+                            size=tokens.ICON_XL,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
                         ft.Text(
                             empty_msg,
-                            size=14,
+                            size=tokens.FONT_MD,
                             color=ft.Colors.ON_SURFACE_VARIANT,
                         ),
                     ],
@@ -111,18 +110,23 @@ def HistoryScreen():
 
     return ft.Container(
         expand=True,
-        padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+        padding=ft.Padding.symmetric(
+            horizontal=tokens.SPACE_MD,
+            vertical=tokens.SPACE_SM,
+        ),
         content=ft.Column(
-            spacing=12,
+            spacing=tokens.SPACE_MD,
             scroll=ft.ScrollMode.AUTO,
             controls=[
                 ft.Row(
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=[
+                        # 24px sits between FONT_LG (20) and FONT_XXL (28);
+                        # no token matches, so the literal stays.
                         ft.Text("History", size=24, weight=ft.FontWeight.W_600),
                         ft.Row(
-                            spacing=4,
+                            spacing=tokens.SPACE_XS,
                             controls=[
                                 ft.TextButton(
                                     "New chat",
@@ -141,11 +145,11 @@ def HistoryScreen():
                     value=query,
                     hint_text="Search conversations…",
                     prefix_icon=ft.Icons.SEARCH,
-                    text_size=13,
+                    text_size=tokens.FONT_BODY_SM,
                     on_change=lambda e: set_query(str(e.control.value or "")),
                 ),
                 *rows,
-                build_banner_ad(),
+                # No banner at the floor: the owner banned them there.
             ],
         ),
     )

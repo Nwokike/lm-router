@@ -46,8 +46,8 @@ def build_update_dialog(
         modal=is_mandatory,
         title=ft.Text(title, weight=ft.FontWeight.BOLD),
         content=ft.Container(
-            width=400,
-            height=300,
+            width=tokens.DIALOG_WIDTH_MD,
+            height=tokens.DIALOG_HEIGHT_SM,
             content=ft.Column(
                 scroll=ft.ScrollMode.AUTO,
                 controls=[
