@@ -125,6 +125,27 @@ def _children(control):
     return out
 
 
+def _walk_all(node, depth: int = 0):
+    """Yield every control in a tree, crossing Component bodies.
+
+    Unlike `_children` this also crosses into nested components (`_b`) and
+    dialog parts (`title`/`actions`), so tests can assert on controls that
+    live several layers deep without hand-rolling a walker each time.
+    """
+    if node is None or depth > 80:
+        return
+    if isinstance(node, list):
+        for item in node:
+            yield from _walk_all(item, depth + 1)
+        return
+    if isinstance(node, Component):
+        yield from _walk_all(getattr(node, "_b", None), depth + 1)
+        return
+    yield node
+    for attr in ("controls", "content", "title", "actions", "leading", "trailing", "items"):
+        yield from _walk_all(getattr(node, attr, None), depth + 1)
+
+
 def test_all_screens_render(_renderer_page):
     from app_shell import AppShell
     from core.state import state
@@ -223,3 +244,223 @@ def test_chat_banners_scroll_with_messages_and_skip_empty_conversations(_rendere
         empty._detach_observable_subscriptions()
         empty._state.mounted = False
         state.messages = previous_messages
+
+
+def test_chat_action_row_shows_visible_actions(_renderer_page):
+    """Every bubble needs a visible Copy/Edit/Regenerate row.
+
+    The gesture-only menu was the SOLE affordance for these actions and it
+    never opened (flet 1.0 reads per-trigger item lists); DDGS ships a plain
+    icon row because long press alone is not discoverable and has no keyboard
+    equivalent. This pins the row's presence per role and its gating.
+    """
+    from core.state import state
+    from screens.chat_screen import ChatScreen
+
+    previous_messages = state.messages
+    state.gateway_running = True
+    state.busy = False
+    state.messages = [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "answer"},
+    ]
+
+    root = _render(ChatScreen)
+    try:
+        tooltips = {
+            node.tooltip
+            for node in _walk_all(root)
+            if isinstance(node, ft.IconButton) and node.tooltip
+        }
+        assert {"Copy", "Edit & resend", "Regenerate"} <= tooltips, (
+            f"visible action row incomplete, found tooltips: {sorted(tooltips)}"
+        )
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.messages = previous_messages
+
+
+def test_chat_action_row_hides_last_turn_actions_while_busy(_renderer_page):
+    """Edit/Regenerate must vanish mid-stream; Copy on a finished reply stays."""
+    from core.state import state
+    from screens.chat_screen import ChatScreen
+
+    previous_messages = state.messages
+    state.gateway_running = True
+    state.busy = True
+    state.messages = [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": ""},
+    ]
+
+    root = _render(ChatScreen)
+    try:
+        tooltips = {
+            node.tooltip
+            for node in _walk_all(root)
+            if isinstance(node, ft.IconButton) and node.tooltip
+        }
+        assert "Regenerate" not in tooltips
+        assert "Edit & resend" not in tooltips
+        # User-side Copy persists mid-stream (copying the question is always
+        # valid); assistant Copy only exists once content has arrived.
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.busy = False
+        state.messages = previous_messages
+
+
+def test_chat_error_rows_offer_recovery_actions(_renderer_page, monkeypatch) -> None:
+    """Every typed error names its own way forward (DDGS parity): rate
+    limits get a one-tap switch-and-retry, offline gets Start gateway, and
+    anything else gets Try again — a dead red line is not an affordance."""
+    from core.state import state
+    from screens.chat_screen import ChatScreen
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    monkeypatch.setattr(
+        "screens.chat_screen.rate_limit_suggestion",
+        lambda model, models: "alt-model",
+    )
+    previous = state.messages
+    state.gateway_running = True
+    state.busy = False
+    state.messages = [
+        {"role": "user", "content": "q"},
+        {"role": "error", "content": "Rate limited by this model.", "kind": "rate_limited"},
+        {"role": "error", "content": "Gateway unreachable.", "kind": "offline"},
+        {"role": "error", "content": "Model setup failed.", "kind": "setup"},
+        {"role": "error", "content": "legacy row without a kind"},
+    ]
+
+    calls: list[str] = []
+    methods = ControllerMethods()
+    methods.regenerate_last = lambda: calls.append("regen")
+    methods.start_gateway = lambda: calls.append("start")
+    methods.set_model = lambda model: calls.append(f"model:{model}")
+
+    root = _render(lambda: ControllerMethodsCtx(methods, ChatScreen))
+    try:
+        buttons = {
+            getattr(node, "content", None)
+            for node in _walk_all(root)
+            if isinstance(node, ft.TextButton)
+        }
+        assert "Use alt-model and retry" in buttons, buttons
+        assert "Start gateway" in buttons, buttons
+        assert "Try again" in buttons, buttons
+        try_count = sum(
+            1
+            for node in _walk_all(root)
+            if isinstance(node, ft.TextButton) and getattr(node, "content", None) == "Try again"
+        )
+        assert try_count == 1, f"only the setup kind gets Try again here; got {try_count}"
+
+        def _click(label: str) -> None:
+            for node in _walk_all(root):
+                if isinstance(node, ft.TextButton) and getattr(node, "content", None) == label:
+                    node.on_click(None)
+                    return
+            raise AssertionError(f"button {label!r} not found")
+
+        _click("Try again")
+        _click("Use alt-model and retry")
+        _click("Start gateway")
+        assert calls == ["regen", "model:alt-model", "regen", "start"], calls
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.messages = previous
+
+
+def test_server_screen_status_words_are_honest(_renderer_page) -> None:
+    """`untested` is the wire word for a capped model; the count bucket is
+    untested+slow — neither may be shown as plain 'rate limited' count or
+    raw 'untested'."""
+    from core.state import state
+    from screens.server_screen import ServerScreen
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    saved = (
+        state.gateway_running,
+        state.gateway_counts,
+        state.models,
+        state.share_url,
+        state.gateway_starting,
+    )
+    state.gateway_running = True
+    state.gateway_counts = {"models": {"active": 3, "degraded": 2, "failed": 1}}
+    state.models = [
+        {"id": "capped-model", "status": "untested"},
+        {"id": "ok-model", "status": "active"},
+    ]
+    state.share_url = ""
+    try:
+        root = _render(lambda: ControllerMethodsCtx(ControllerMethods(), ServerScreen))
+        texts: list[str] = []
+        for node in _walk_all(root):
+            if isinstance(node, str):
+                texts.append(node)
+            else:
+                value = getattr(node, "value", None)
+                if isinstance(value, str):
+                    texts.append(value)
+        blob = " ".join(texts)
+        assert "2 capped or slow" in blob, blob[:500]
+        assert "2 rate limited" not in blob, "the mixed bucket must not claim rate limiting"
+        assert "rate limited" in blob, "the untested row must read 'rate limited'"
+        assert "untested" not in blob, "the raw wire word must never reach the user"
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        (
+            state.gateway_running,
+            state.gateway_counts,
+            state.models,
+            state.share_url,
+            state.gateway_starting,
+        ) = saved
+
+
+def test_server_header_exposes_the_activity_log_and_notice_keeps_remedy(
+    _renderer_page,
+) -> None:
+    """The log-terminal dialog existed with ZERO callers while three notices
+    told users to 'See logs.'; the shell banner must also keep enough lines
+    to show the remedy, not just the diagnosis."""
+    from app_shell import AppShell
+    from core.state import state
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    saved = (state.notice, state.onboarding_done, state.selected_tab)
+    state.notice = "x" * 160
+    state.onboarding_done = True
+    state.selected_tab = 1  # AppShell mounts only the selected view: Server
+    calls: list[str] = []
+    methods = ControllerMethods()
+    methods.open_log_terminal = lambda: calls.append("log")
+
+    root = _render(lambda: ControllerMethodsCtx(methods, lambda: AppShell()))
+    try:
+        log_buttons = [
+            node
+            for node in _walk_all(root)
+            if isinstance(node, ft.IconButton) and getattr(node, "tooltip", None) == "Activity log"
+        ]
+        assert log_buttons, "the Server header must expose the Activity log"
+        log_buttons[0].on_click(None)
+        assert calls == ["log"]
+
+        notice_texts = [
+            node
+            for node in _walk_all(root)
+            if isinstance(node, ft.Text) and getattr(node, "value", None) == state.notice
+        ]
+        assert notice_texts, "the notice banner must render"
+        assert notice_texts[0].max_lines == 5, "the remedy line was being ellipsised away"
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.notice, state.onboarding_done, state.selected_tab = saved

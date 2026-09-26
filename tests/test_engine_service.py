@@ -134,7 +134,8 @@ def test_validate_engine_pep440_versions() -> None:
 
     # Non-PEP440 version: ACCEPTED raw — a live router.kiri.ng update must
     # never be rejected over version formatting (it would pin us to the
-    # stale bundled copy). Strict validation lives in scripts/fetch_engine.py.
+    # stale bundled copy). Strict PEP 440 parsing deliberately stays out
+    # of this module (no packaging dependency).
     weird_script = b'VERSION = "build-99x"\nif __name__ == "__main__":\n    pass'
     assert engine_mod._validate(weird_script) == "build-99x"
 
@@ -217,3 +218,37 @@ def test_download_sends_a_user_agent(monkeypatch) -> None:
     assert seen["ua"], "no User-Agent header was sent"
     assert "Python-urllib" not in seen["ua"]
     assert "LM-Router" in seen["ua"]
+
+
+def test_broken_download_cannot_brick_the_cache(monkeypatch, tmp_path) -> None:
+    """A download that passes _validate but fails to IMPORT must leave the
+    last-known-good cache untouched — the old order overwrote the cache
+    first, so one bad upstream push permanently broke offline starts."""
+    monkeypatch.setenv("FLET_APP_STORAGE_DATA", str(tmp_path))
+    cache = storage.engine_cache_path()
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_bytes(FIXTURE_BYTES)
+
+    broken = (
+        b'if __name__ == "__main__":\n    pass\nVERSION = "9.9.9"\nthis is not valid python (((\n'
+    )
+    assert engine_mod._validate(broken) == "9.9.9"  # the trap: validate passes
+    monkeypatch.setattr(engine_mod, "_download", lambda url: broken)
+
+    module, label = engine_mod.load_engine()
+    assert label.startswith("cached"), label
+    assert module is not None
+    assert cache.read_bytes() == FIXTURE_BYTES, "bad download must not clobber the cache"
+    assert not cache.with_name(cache.stem + ".new.py").exists(), "no tmp leftovers"
+
+
+def test_loadable_download_replaces_the_cache_cleanly(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("FLET_APP_STORAGE_DATA", str(tmp_path))
+    monkeypatch.setattr(engine_mod, "_download", lambda url: FIXTURE_BYTES)
+
+    module, label = engine_mod.load_engine()
+    assert label.startswith("fetched"), label
+    assert module is not None
+    cache = storage.engine_cache_path()
+    assert cache.read_bytes() == FIXTURE_BYTES
+    assert not cache.with_name(cache.stem + ".new.py").exists()

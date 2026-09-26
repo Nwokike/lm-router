@@ -51,3 +51,20 @@ def test_log_path_and_tail(tmp_path, monkeypatch) -> None:
     out = tail(2)
     assert "line two" in out
     assert "line one" not in out
+
+
+def test_redact_covers_modern_key_shapes() -> None:
+    """sk-proj- and sk-ant- contain a hyphen; the old [A-Za-z0-9] class
+    stopped after "sk-" and let today's default keys reach file, stdout and
+    the on-screen ring unredacted."""
+    from core.logging import redact
+
+    for key in (
+        "sk-proj-abcdefgh12345678ABCD",
+        "sk-ant-api03-abcdefghijklmnop",
+        "sk-t01-abcdefghijklmnopqrst",
+    ):
+        line = f"request failed with {key} in the header"
+        cleaned = redact(line)
+        assert key not in cleaned, f"{key} survived redaction: {cleaned}"
+        assert "sk-[REDACTED]" in cleaned

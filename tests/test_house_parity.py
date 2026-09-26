@@ -374,10 +374,12 @@ def test_server_screen_renders_on_settings_save() -> None:
         "'Require API key' re-renders nothing and the key field never appears"
     )
     settings = _read("screens/settings_screen.py")
-    assert "if _notice" in settings, (
-        "Settings validation/success notices are set but never rendered"
+    assert "_notice" not in settings, (
+        "the in-list settings notice banner is back: it sits ABOVE a "
+        "full-screen ListView, so every confirmation was unreachable — "
+        "notices are SnackBars (scroll-independent, Sherlock's pattern) now"
     )
-    assert settings.count("set_notice(") >= 10
+    assert settings.count("show_snack(") >= 10, "settings confirmations lost their visible surface"
 
 
 def test_catalog_is_bounded_and_logs_never_autoscroll() -> None:
@@ -400,3 +402,55 @@ def test_console_logging_exists() -> None:
     """`uv run flet run` must print logs; ring+file alone showed nothing."""
     logging_src = _read("core/logging.py")
     assert "StreamHandler" in logging_src, "no console handler: dev runs log nothing"
+
+
+def test_about_dialog_carries_no_licence_block(_renderer_page) -> None:
+    """Owner rule: NO licence line on any About surface.
+
+    Settings' About card documents the drop ("minus the open-source licence
+    line, which the owner asked to drop") but the header-chip dialog still
+    rendered a four-line Apache/MIT block — attribution lives in the README.
+    Built as a construction test so a rendered block can never sneak back.
+    """
+    from components.about_dialog import build_about_dialog
+    from state.controller_ctx import ControllerMethods
+
+    dialog = build_about_dialog(_renderer_page, state, ControllerMethods())
+
+    texts: list[str] = []
+    for part in (dialog.title, dialog.content, dialog.actions):
+        for node in _walk(part):
+            if isinstance(node, str):
+                texts.append(node)
+            else:
+                value = getattr(node, "value", None)
+                if isinstance(value, str):
+                    texts.append(value)
+
+    blob = " ".join(texts).lower()
+    assert "licen" not in blob, f"licence text rendered in About dialog: {texts}"
+    assert "apache" not in blob, f"licence text rendered in About dialog: {texts}"
+    assert "(mit)" not in blob, f"licence text rendered in About dialog: {texts}"
+    # The dialog still carries its identity rows.
+    assert any("version" in t.lower() for t in texts)
+
+
+def test_copy_matches_the_house_style() -> None:
+    """Small copy contracts that keep drifting: the Sherlock subtitle, the
+    one Title-Case button, the Stop/Start pair, and the label that must say
+    what it actually copies."""
+    settings = _read("screens/settings_screen.py")
+    assert "Choose between Light, Dark, or System" in settings, (
+        "theme subtitle drifted from Sherlock's verbatim string"
+    )
+
+    server = _read("screens/server_screen.py")
+    assert '"Stop gateway"' in server, "Stop must name what it stops (Start gateway does)"
+    assert '"Copy log file"' in server, "the button copies the whole file, not the view"
+
+    dialog = _read("components/update_dialog.py")
+    assert '"Download update"' in dialog, "buttons are sentence case in this house"
+    assert '"Download Update"' not in dialog
+
+    shell = _read("app_shell.py")
+    assert 'tooltip="Activity log"' in shell, "the log terminal must stay reachable"

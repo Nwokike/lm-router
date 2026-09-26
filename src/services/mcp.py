@@ -187,22 +187,31 @@ class MCPHub:
 
     async def serve(self) -> None:
         """Owner task: enter/close the tools context in THIS task only."""
-        while not self._stop.is_set():
+        try:
+            while not self._stop.is_set():
+                try:
+                    await self._connect()
+                except Exception as exc:
+                    LOG.warning("mcp apply failed: %s", exc)
+                    self.tools = []
+                    self.names = []
+                    self.generation += 1
+                    self._status(f"MCP connection failed: {str(exc)[:200]}")
+                else:
+                    self._status(None)
+                self._reconnect.clear()
+                while not self._stop.is_set() and not self._reconnect.is_set():
+                    # thread-safe wait; never blocks the portal loop
+                    await asyncio.to_thread(self._reconnect.wait, 0.5)
+        finally:
+            # Cancellation (portal teardown) must still unwind the entered
+            # contexts: they were entered MANUALLY, so they sit on no stack
+            # frame and task cancellation would otherwise abandon the session
+            # groups and any stdio child processes.
             try:
-                await self._connect()
+                await self._close_owned()
             except Exception as exc:
-                LOG.warning("mcp apply failed: %s", exc)
-                self.tools = []
-                self.names = []
-                self.generation += 1
-                self._status(f"MCP connection failed: {str(exc)[:200]}")
-            else:
-                self._status(None)
-            self._reconnect.clear()
-            while not self._stop.is_set() and not self._reconnect.is_set():
-                # thread-safe wait; never blocks the portal loop
-                await asyncio.to_thread(self._reconnect.wait, 0.5)
-        await self._close_owned()
+                LOG.warning("mcp owner cleanup failed: %s", exc)
 
     async def _connect(self) -> None:
         """Connect each enabled server on its own.

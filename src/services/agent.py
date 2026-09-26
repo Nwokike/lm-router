@@ -218,6 +218,15 @@ class AgentService:
         self._tools_gen: object = None
         self._current: Any = None
         self._tools_error: str | None = None
+        # Build-time settings this kani was constructed WITH — both are read
+        # only at construction, so they must join the reuse comparison below
+        # or changing them silently does nothing for the session.
+        self._retry: int | None = None
+        self._ctx: int | None = None
+        # Set by the controller to re-spawn long-lived portal tasks (the MCP
+        # owner loop) after a portal restart — without it, a restart silently
+        # kills MCP for the rest of the session.
+        self.on_portal_restart: Callable[[], None] | None = None
 
     # lifecycle
 
@@ -271,6 +280,11 @@ class AgentService:
                 LOG.warning("old portal teardown: %s", exc)
         self.start()
         LOG.warning("agent portal restarted")
+        if self.on_portal_restart is not None:
+            try:
+                self.on_portal_restart()
+            except Exception as exc:
+                LOG.warning("portal-restart callback failed: %s", exc)
 
     def spawn(self, fn: Callable[..., Any], *args: Any) -> Any:
         """Start a long-lived portal task (e.g. the MCP owner loop)."""
@@ -333,6 +347,8 @@ class AgentService:
             and self._system == system_prompt
             and self._base == base
             and self._tools_gen == tools_gen
+            and self._retry == self.settings.tool_retry_attempts
+            and self._ctx == self.settings.max_context_tokens
         ):
             # Same turn shape: reuse the engine, but re-point its reasoning tap
             # so a rebuild is not needed to capture this turn's thoughts.
@@ -358,6 +374,8 @@ class AgentService:
         self._system = system_prompt
         self._base = base
         self._tools_gen = tools_gen
+        self._retry = self.settings.tool_retry_attempts
+        self._ctx = self.settings.max_context_tokens
         LOG.info("kani ready model=%s base=%s tools=%d", model, base, len(tools))
         return self._kani
 

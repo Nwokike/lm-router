@@ -9,6 +9,7 @@ from components.section_header import section_header
 from components.settings_kit import setting_row, settings_card
 from core import constants, theme, tokens
 from core.logging import LOG
+from core.notify import show_snack
 from core.settings import AppSettings
 from core.state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
@@ -61,7 +62,6 @@ def SettingsScreen():
     tell_time, set_tell_time = ft.use_state(settings.tell_model_time)
     m_target, set_m_target = ft.use_state("")
     m_headers, set_m_headers = ft.use_state("")
-    _notice, set_notice = ft.use_state("")
 
     def _section(title: str, rows: list) -> list[ft.Control]:
         """Uppercase label above a bordered card, Sherlock's layout."""
@@ -133,20 +133,25 @@ def SettingsScreen():
             animate=ft.Animation(tokens.ANIM_FAST, "easeOut"),
         )
 
+    def _set_autostart(value: bool) -> None:
+        set_autostart(value)
+        methods.save_settings({"gateway_autostart": value})
+
     def _save_gateway(_: object) -> None:
         try:
             port = int(port_text)
             if not 1 <= port <= 65535:
                 raise ValueError
         except ValueError:
-            set_notice("Port must be 1 to 65535.")
+            show_snack(page, "Port must be 1 to 65535.")
             return
-        methods.save_settings({"gateway_port": port, "gateway_autostart": autostart})
-        set_notice("Saved. Restart the gateway to use the new port.")
+        # gateway_autostart is NOT here: _set_autostart is its single writer.
+        methods.save_settings({"gateway_port": port})
+        show_snack(page, "Saved. Restart the gateway to use the new port.")
 
     def _save_prompt(_: object) -> None:
         methods.save_settings({"system_prompt": draft_prompt})
-        set_notice("System prompt saved.")
+        show_snack(page, "System prompt saved.")
 
     def _set_tell_time(value: bool) -> None:
         set_tell_time(value)
@@ -157,10 +162,12 @@ def SettingsScreen():
         methods.save_settings({"keep_running_when_closed": value})
 
     def _save_generation(_: object) -> None:
-        """Persist every generation knob, reporting the first bad value.
+        """Persist every generation knob, clamped to the model's own bounds.
 
-        The controller reverts the whole set on ValidationError, so we surface
-        the message rather than claiming success.
+        Sherlock clamps client-side: a value that parses but is out of range
+        used to reach the controller, fail validation, and leave the field
+        showing the rejected number while the error surfaced on a different
+        surface. Bounds mirror core/settings.py Field constraints.
         """
 
         def _num(raw: str, label: str) -> float:
@@ -169,30 +176,51 @@ def SettingsScreen():
             except TypeError, ValueError:
                 raise ValueError(f"{label} must be a number.")
 
+        def _bound(value: float, lo: float, hi: float) -> float:
+            return max(lo, min(hi, value))
+
         try:
-            methods.save_settings(
-                {
-                    "temperature": _num(gen_temperature, "Temperature"),
-                    "top_p": _num(gen_top_p, "Top P"),
-                    "max_reply_tokens": int(_num(gen_max_tokens, "Max reply tokens")),
-                    "presence_penalty": _num(gen_presence, "Presence penalty"),
-                    "frequency_penalty": _num(gen_frequency, "Frequency penalty"),
-                    "max_context_tokens": int(_num(gen_context, "Context window")),
-                    "tool_max_rounds": int(_num(gen_tool_rounds, "Tool rounds")),
-                    "tool_retry_attempts": int(_num(gen_tool_retries, "Tool retries")),
-                    "reasoning_effort": gen_reasoning,
-                    "json_mode": gen_json_mode,
-                },
-            )
+            temperature = _bound(_num(gen_temperature, "Temperature"), 0.0, 2.0)
+            top_p = _bound(_num(gen_top_p, "Top P"), 0.0, 1.0)
+            max_tokens = int(_bound(_num(gen_max_tokens, "Max reply tokens"), 1, 131_072))
+            presence = _bound(_num(gen_presence, "Presence penalty"), -2.0, 2.0)
+            frequency = _bound(_num(gen_frequency, "Frequency penalty"), -2.0, 2.0)
+            context = max(1024, int(_num(gen_context, "Context window")))
+            rounds = int(_bound(_num(gen_tool_rounds, "Tool rounds"), 1, 10))
+            retries = int(_bound(_num(gen_tool_retries, "Tool retries"), 0, 5))
         except ValueError as exc:
-            set_notice(str(exc))
+            show_snack(page, str(exc))
             return
-        set_notice("Generation settings saved.")
+        methods.save_settings(
+            {
+                "temperature": temperature,
+                "top_p": top_p,
+                "max_reply_tokens": max_tokens,
+                "presence_penalty": presence,
+                "frequency_penalty": frequency,
+                "max_context_tokens": context,
+                "tool_max_rounds": rounds,
+                "tool_retry_attempts": retries,
+                "reasoning_effort": gen_reasoning,
+                "json_mode": gen_json_mode,
+            },
+        )
+        # Push the CLAMPED values back into the fields: use_state never
+        # re-reads prefs, so "9" would keep displaying while 2.0 is stored.
+        set_gen_temperature(f"{temperature:g}")
+        set_gen_top_p(f"{top_p:g}")
+        set_gen_max_tokens(str(max_tokens))
+        set_gen_presence(f"{presence:g}")
+        set_gen_frequency(f"{frequency:g}")
+        set_gen_context(str(context))
+        set_gen_tool_rounds(str(rounds))
+        set_gen_tool_retries(str(retries))
+        show_snack(page, "Generation settings saved.")
         set_gen_open(False)
 
     def _add_provider(_: object) -> None:
         if not p_name.strip() or not p_url.strip():
-            set_notice("Name and base URL are required.")
+            show_snack(page, "Name and base URL are required.")
             return
         methods.add_provider(
             {
@@ -206,11 +234,11 @@ def SettingsScreen():
         set_p_url("")
         set_p_key("")
         set_provider_open(False)
-        set_notice("Provider added.")
+        show_snack(page, "Provider added.")
 
     def _add_mcp(_: object) -> None:
         if not m_name.strip() or not m_target.strip():
-            set_notice("Name and command or URL are required.")
+            show_snack(page, "Name and command or URL are required.")
             return
         headers: dict[str, str] = {}
         if m_headers.strip():
@@ -220,7 +248,7 @@ def SettingsScreen():
                     raise ValueError("not an object")
                 headers = {str(k): str(v) for k, v in parsed.items()}
             except ValueError:
-                set_notice("Headers must be a JSON object.")
+                show_snack(page, "Headers must be a JSON object.")
                 return
         # MCPServerConfig takes `command` (stdio) or `url` (remote). A single
         # `target` key is dropped by extra="ignore", so every add used to fail
@@ -242,7 +270,7 @@ def SettingsScreen():
         set_m_target("")
         set_m_headers("")
         set_mcp_open(False)
-        set_notice("MCP server added.")
+        show_snack(page, "MCP server added.")
 
     def _test_mcp(server_id: str) -> None:
         if server_id in state.mcp_testing:
@@ -307,7 +335,7 @@ def SettingsScreen():
                                             weight=ft.FontWeight.W_500,
                                         ),
                                         ft.Text(
-                                            "Light, Dark, or System",
+                                            "Choose between Light, Dark, or System",
                                             size=tokens.FONT_XS,
                                             color=ft.Colors.with_opacity(
                                                 tokens.OPACITY_DIM,
@@ -362,7 +390,10 @@ def SettingsScreen():
                 trailing=ft.Switch(
                     value=autostart,
                     active_color=ft.Colors.PRIMARY,
-                    on_change=lambda e: set_autostart(bool(e.control.value)),
+                    # Immediate persist, same as Keep-running below — the two
+                    # switches used to have opposite semantics with no label
+                    # saying so, and this one silently discarded on navigate.
+                    on_change=lambda e: _set_autostart(bool(e.control.value)),
                 ),
                 stacked=narrow,
             ),
@@ -1002,22 +1033,6 @@ def SettingsScreen():
         spacing=0,
         controls=[
             ft.Container(height=tokens.SPACE_SM),
-            # One shared notice line for every save/add/validate callback. It is
-            # always visible when set, so a confirmation is never swallowed.
-            *(
-                [
-                    ft.Container(
-                        padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_MD, tokens.SPACE_LG, 0),
-                        content=ft.Text(
-                            _notice,
-                            size=tokens.FONT_XS,
-                            color=theme.PRIMARY,
-                        ),
-                    ),
-                ]
-                if _notice
-                else []
-            ),
             *appearance,
             *gateway,
             build_banner_ad(),

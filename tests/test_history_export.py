@@ -121,3 +121,157 @@ def test_delete_and_clear_all(tmp_path, monkeypatch) -> None:
 
     history.clear_all()
     assert history.list_conversations() == []
+
+
+# --- durability: tombstones, atomicity, retention (DDGS-ported) -------------
+
+import os  # noqa: E402  (kept with the durability block it serves)
+
+from core import storage  # noqa: E402
+from core.state import state  # noqa: E402
+
+
+class _FakeKani:
+    """Just enough kani: save writes the SavedKani JSON shape."""
+
+    def __init__(self) -> None:
+        self.chat_history = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "yo"},
+        ]
+        self.save_calls: list[tuple[str, str | None]] = []
+
+    def save(self, fp, *, save_format=None, **kwargs) -> None:
+        # The format must be pinned: kani infers ZIP from a ".tmp" suffix.
+        self.save_calls.append((str(fp), save_format))
+        Path(fp).write_text(
+            json.dumps(
+                {"always_included_messages": [], "chat_history": self.chat_history},
+            ),
+            encoding="utf-8",
+        )
+
+
+class _FakeAgent:
+    def __init__(self) -> None:
+        self.kani = _FakeKani()
+
+
+def test_a_pending_save_cannot_resurrect_a_deleted_chat(tmp_path, monkeypatch) -> None:
+    _iso(tmp_path, monkeypatch)
+    history._tombstones.clear()
+    agent = _FakeAgent()
+    state.active_conversation = "tomb00000001"
+    try:
+        assert history.save_conversation(agent) is True
+        path = history.conversation_path("tomb00000001")
+        assert path.exists()
+        calls_before = len(agent.kani.save_calls)
+        assert calls_before == 1
+
+        assert history.delete_conversation("tomb00000001") is True
+        assert not path.exists()
+
+        # The save that was already in flight now replays — and must refuse.
+        # Returns True (delete intent wins; no bogus "not saved" toast).
+        assert history.save_conversation(agent) is True
+        assert not path.exists(), "delete must not be undone"
+        # Atomic write leaves no .tmp behind either way.
+        assert not list(tmp_path.glob("conversations/*.tmp"))
+        assert len(agent.kani.save_calls) == calls_before, "tombstoned id must not reach kani.save"
+    finally:
+        state.active_conversation = ""
+
+
+def test_delete_reports_success_for_missing_and_twice(tmp_path, monkeypatch) -> None:
+    _iso(tmp_path, monkeypatch)
+    history._tombstones.clear()
+    # Never existed: the user's intent is satisfied.
+    assert history.delete_conversation("never-existed-id") is True
+    # Gone already: double-click must not surface a failure toast.
+    path = _write_conversation(tmp_path, "twice0000001", [{"role": "user", "content": "x"}])
+    assert history.delete_conversation("twice0000001") is True
+    assert not path.exists()
+    assert history.delete_conversation("twice0000001") is True
+
+
+def test_clear_all_tombstones_every_id(tmp_path, monkeypatch) -> None:
+    _iso(tmp_path, monkeypatch)
+    history._tombstones.clear()
+    _write_conversation(tmp_path, "clear00000001", [{"role": "user", "content": "a"}])
+    state.active_conversation = "clear00000002"
+    _write_conversation(tmp_path, "clear00000002", [{"role": "user", "content": "b"}])
+    try:
+        agent = _FakeAgent()
+        assert history.save_conversation(agent) is True
+        assert history.clear_all() == 0
+        assert history.list_conversations() == []
+
+        assert history.save_conversation(agent) is True
+        assert not history.conversation_path("clear00000002").exists(), (
+            "clear_all must not be undone by a pending save"
+        )
+    finally:
+        state.active_conversation = ""
+
+
+def test_prune_keeps_fifty_and_never_the_active(tmp_path, monkeypatch) -> None:
+    _iso(tmp_path, monkeypatch)
+    history._tombstones.clear()
+    base = 1_700_000_000
+    for index in range(55):
+        path = _write_conversation(
+            tmp_path,
+            f"conv{index:010d}",
+            [{"role": "user", "content": f"m{index}"}],
+        )
+        stamp = base + index  # distinct mtimes: conv000 is the OLDEST
+        os.utime(path, (stamp, stamp))
+
+    # The active conversation is the OLDEST file — it must still survive.
+    state.active_conversation = "conv0000000000"
+    try:
+        agent = _FakeAgent()
+        assert history.save_conversation(agent) is True
+        remaining = history.list_conversations()
+        assert len(remaining) == history.MAX_CONVERSATIONS
+        ids = {item["id"] for item in remaining}
+        assert "conv0000000000" in ids, "active conversation must never be pruned"
+        assert "conv0000000054" in ids, "newest conversation must survive"
+        assert "conv0000000001" not in ids, "the oldest unprotected chat goes first"
+    finally:
+        state.active_conversation = ""
+
+
+def test_conversation_path_stays_inside_the_conversations_dir(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _iso(tmp_path, monkeypatch)
+    hostile = history.conversation_path("../../evil")
+    assert hostile.parent == storage.conversations_dir()
+    assert ".." not in hostile.name
+    assert hostile.name == "evil.json"
+
+
+def test_title_collapses_internal_whitespace(tmp_path, monkeypatch) -> None:
+    _iso(tmp_path, monkeypatch)
+    _write_conversation(
+        tmp_path,
+        "titlex0000001",
+        [{"role": "user", "content": "line one\nline two   with spaces"}],
+    )
+    items = history.list_conversations()
+    assert items[0]["title"] == "line one line two with spaces"
+
+
+def test_conversations_dir_survives_an_unwritable_parent(tmp_path, monkeypatch) -> None:
+    _iso(tmp_path, monkeypatch)
+
+    def _boom(*_a, **_k) -> None:
+        raise OSError("denied")
+
+    monkeypatch.setattr(Path, "mkdir", _boom)
+    # Neither the dir helper nor the boot-time listing may raise.
+    assert isinstance(storage.conversations_dir(), Path)
+    assert history.list_conversations() == []

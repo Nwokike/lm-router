@@ -115,7 +115,7 @@ def AppShell():
                         state.notice,
                         size=tokens.FONT_SM,
                         color=ft.Colors.ERROR,
-                        max_lines=3,
+                        max_lines=5,
                         overflow=ft.TextOverflow.ELLIPSIS,
                         expand=True,
                     ),
@@ -155,7 +155,18 @@ def AppShell():
             expand=True,
             spacing=0,
             controls=[
-                AppHeader(title="Server", show_quit=True),
+                AppHeader(
+                    title="Server",
+                    show_quit=True,
+                    extra_actions=[
+                        ft.IconButton(
+                            ft.Icons.TERMINAL_ROUNDED,
+                            icon_size=tokens.ICON_MD,
+                            tooltip="Activity log",
+                            on_click=lambda _: methods.open_log_terminal(),
+                        ),
+                    ],
+                ),
                 ServerScreen(key=ft.ValueKey("view-server")),
             ],
         ),

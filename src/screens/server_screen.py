@@ -5,7 +5,12 @@ import flet as ft
 from components.banner_ad import build_banner_ad
 from core import logging as applog
 from core import theme, tokens
-from core.catalog import chat_support_note, endpoint_label, rate_hint_label
+from core.catalog import (
+    chat_support_note,
+    endpoint_label,
+    rate_hint_label,
+    status_label,
+)
 from core.settings import AppSettings
 from core.state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
@@ -101,6 +106,18 @@ def ServerScreen():
         lambda: set_prefs(AppSettings.load()),
         [state.settings_version],
     )
+    # Share-key draft: typing must not write the settings JSON on every
+    # keystroke (atomic rewrite + version bump + full screen reload PER KEY).
+    # Commit on submit/blur — Sherlock's keyword-field pattern — and follow
+    # regenerate through the prefs reload above.
+    key_draft, set_key_draft = ft.use_state(prefs.share_key)
+    ft.use_effect(lambda: set_key_draft(prefs.share_key), [prefs.share_key])
+
+    def _commit_key(raw: object) -> None:
+        value = str(raw or "").strip()
+        if value != prefs.share_key:
+            methods.save_settings({"share_key": value})
+
     page = getattr(ft.context, "page", None)
     is_dark = theme.is_dark_mode(page, state.theme_mode)
 
@@ -193,7 +210,7 @@ def ServerScreen():
             summary = (
                 f"{model_counts.get('active', 0)} active"
                 + (
-                    f" · {model_counts.get('degraded', 0)} rate limited"
+                    f" · {model_counts.get('degraded', 0)} capped or slow"
                     if model_counts.get("degraded")
                     else ""
                 )
@@ -377,15 +394,18 @@ def ServerScreen():
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=[
                         ft.TextField(
-                            value=prefs.share_key,
+                            value=key_draft,
                             label="API key",
                             hint_text="Generate a key or type one",
                             text_size=tokens.FONT_SM,
-                            font_family="monospace",
+                            # TextField has no font_family in flet 1.0 — the
+                            # font belongs to a TextStyle (a bare kwarg raises
+                            # TypeError and took the whole Server tab down).
+                            text_style=ft.TextStyle(font_family="monospace"),
                             expand=True,
-                            on_change=lambda e: methods.save_settings(
-                                {"share_key": str(e.control.value or "").strip()}
-                            ),
+                            on_change=lambda e: set_key_draft(str(e.control.value or "")),
+                            on_submit=lambda e: _commit_key(e.control.value),
+                            on_blur=lambda e: _commit_key(e.control.value),
                         ),
                         ft.IconButton(
                             ft.Icons.AUTORENEW_ROUNDED,
@@ -395,7 +415,9 @@ def ServerScreen():
                         ft.IconButton(
                             ft.Icons.CONTENT_COPY_ROUNDED,
                             tooltip="Copy key",
-                            on_click=lambda _e, k=prefs.share_key: methods.copy_text(k),
+                            # Draft, not prefs: copy what the user SEES —
+                            # blur/submit commits it moments later.
+                            on_click=lambda _e, k=key_draft: methods.copy_text(k),
                         ),
                     ],
                 ),
@@ -422,7 +444,10 @@ def ServerScreen():
                     ),
                 ),
             )
-        if prefs.require_share_key:
+        if not prefs.require_share_key:
+            # Inverted on purpose: the warning belongs to the INSECURE
+            # configuration (no key required), not the secure one — the old
+            # condition told users they had no key exactly when they did.
             controls.append(
                 ft.Container(
                     padding=ft.Padding.symmetric(
@@ -512,7 +537,7 @@ def ServerScreen():
         if latency is not None:
             badges.append(
                 ft.Text(
-                    f"{latency}ms",
+                    f"{latency} ms",
                     size=tokens.FONT_XS,
                     color=ft.Colors.ON_SURFACE_VARIANT,
                 ),
@@ -532,7 +557,7 @@ def ServerScreen():
                         bgcolor=status_dot_color,
                     ),
                     ft.Text(
-                        status,
+                        status_label(status),
                         size=tokens.FONT_2XS,
                         color=status_dot_color,
                     ),
@@ -744,7 +769,7 @@ def ServerScreen():
                                     # Reflect the in-flight start so a second
                                     # press cannot race the first.
                                     (
-                                        "Stop"
+                                        "Stop gateway"
                                         if running
                                         else (
                                             "Starting…"
@@ -831,7 +856,7 @@ def ServerScreen():
                                             ),
                                             filter_chips,
                                             ft.TextButton(
-                                                "Copy logs",
+                                                "Copy log file",
                                                 icon=ft.Icons.CONTENT_COPY_ROUNDED,
                                                 tooltip="Copy log file",
                                                 on_click=lambda _: methods.copy_logs(),
@@ -847,7 +872,7 @@ def ServerScreen():
                                             # No auto_scroll: it yanked the view
                                             # to the bottom on every new line,
                                             # so the owner could never scroll
-                                            # up to find the error. "Copy logs"
+                                            # up to find the error. "Copy log file"
                                             # still grabs the whole file.
                                         ),
                                     ),

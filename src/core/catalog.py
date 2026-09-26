@@ -110,6 +110,20 @@ def chat_models(catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return auto + rest
 
 
+def _as_int(value: object, default: int) -> int:
+    try:
+        return int(value)  # type: ignore[call-overload]
+    except TypeError, ValueError:
+        return default
+
+
+def _as_float(value: object, default: float) -> float:
+    try:
+        return float(value)  # type: ignore[call-overload]
+    except TypeError, ValueError:
+        return default
+
+
 def rate_hint_label(model: dict[str, Any] | None) -> str:
     """One-line rate-limit summary, e.g. "Free tier, ~200/hour"."""
     if not model:
@@ -120,10 +134,14 @@ def rate_hint_label(model: dict[str, Any] | None) -> str:
     label = str(hint.get("label") or "").strip()
     if label:
         return label
-    per_hour = hint.get("approx_per_hour")
+    # Remote metadata is untrusted: a router publishing "lots" used to raise
+    # inside agent.py's `except RateLimitError` (a SIBLING catch) — the turn
+    # died with no error row at all — and the same call sits in two render
+    # paths. Coerce defensively; unparseable falls back to the tier only.
+    per_hour = _as_int(hint.get("approx_per_hour"), 0)
     tier = str(hint.get("tier") or "").strip()
-    if per_hour:
-        return f"{tier.capitalize() or 'Free tier'}, ~{int(per_hour):,}/hour"
+    if per_hour > 0:
+        return f"{tier.capitalize() or 'Free tier'}, ~{per_hour:,}/hour"
     return tier.capitalize()
 
 
@@ -133,6 +151,51 @@ def model_label(model: dict[str, Any]) -> str:
         return ""
     model_id = str(model.get("id") or "")
     return "Auto" if is_auto(model) else model_id
+
+
+def status_label(status: object) -> str:
+    """Gateway status word -> user-facing label.
+
+    The gateway vocabulary is active|untested|slow|failed; `untested` means
+    tried-and-capped, which the owner says to call "rate limited" — never the
+    raw wire word, and never "degraded".
+    """
+    word = str(status or "").strip().lower()
+    if not word:
+        return "unavailable"
+    return "rate limited" if word == "untested" else word
+
+
+def _rank_alternatives(model_id: str, catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    alternatives = [
+        m
+        for m in chat_models([m for m in catalog or [] if isinstance(m, dict)])
+        if str(m.get("id") or "") != model_id
+    ]
+
+    # Prefer an alternative whose own hint is not a low cap, so the suggestion
+    # is likely to work right now.
+    def _cap(m: dict) -> tuple[int, float, str]:
+        per_hour = (m.get("rate_hint") or {}).get("approx_per_hour")
+        try:
+            cap = int(per_hour) if per_hour is not None else 10**9
+        except TypeError, ValueError:
+            cap = 10**9
+        latency = _as_float(m.get("latency_ms"), 10**6)
+        return (0 if cap >= 200 else 1, latency, str(m.get("id") or ""))
+
+    alternatives.sort(key=_cap)
+    return alternatives
+
+
+def rate_limit_suggestion(model_id: str, catalog: list[dict[str, Any]]) -> str:
+    """First-choice alternative model id for a rate-limited model ("" = none).
+
+    Pairs with rate_limit_advice's "Try X instead." text: the message names
+    the alternatives, this hands the UI a tappable id for the action button.
+    """
+    ranked = _rank_alternatives(model_id, catalog)
+    return str(ranked[0].get("id") or "") if ranked else ""
 
 
 def rate_limit_advice(model_id: str, catalog: list[dict[str, Any]]) -> str:
@@ -154,27 +217,10 @@ def rate_limit_advice(model_id: str, catalog: list[dict[str, Any]]) -> str:
             )
         return "Rate limited right now. Try again shortly, or pick a model below."
 
-    alternatives = [
-        m
-        for m in chat_models([m for m in catalog or [] if isinstance(m, dict)])
-        if str(m.get("id") or "") != model_id
-    ]
-
-    # Prefer an alternative whose own hint is not a low cap, so the suggestion
-    # is likely to work right now.
-    def _cap(m: dict) -> tuple[int, float, str]:
-        per_hour = (m.get("rate_hint") or {}).get("approx_per_hour")
-        try:
-            cap = int(per_hour) if per_hour is not None else 10**9
-        except TypeError, ValueError:
-            cap = 10**9
-        latency = float(m.get("latency_ms") or 10**6)
-        return (0 if cap >= 200 else 1, latency, str(m.get("id") or ""))
-
-    alternatives.sort(key=_cap)
+    ranked = _rank_alternatives(model_id, catalog)
     suggestion = ""
-    if alternatives:
-        names = ", ".join(str(m.get("id")) for m in alternatives[:2])
+    if ranked:
+        names = ", ".join(str(m.get("id")) for m in ranked[:2])
         suggestion = f" Try {names} instead."
 
     if hint:
@@ -203,5 +249,5 @@ def chat_support_note(model: dict[str, Any]) -> str:
     if raw == "systemone":
         return "Not usable in chat: this endpoint does not return an OpenAI-shaped reply"
     if not is_active(model):
-        return f"Currently {model.get('status') or 'unavailable'}"
+        return f"Currently {status_label(model.get('status'))}"
     return ""

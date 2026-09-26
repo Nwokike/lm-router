@@ -8,15 +8,24 @@ from . import constants
 
 
 def base_dir() -> Path:
-    """App-private storage on mobile (FLET_APP_STORAGE_DATA), cwd on desktop.
+    """App-private storage on mobile (FLET_APP_STORAGE_DATA), ~/.lm_router
+    otherwise.
 
     This is the *data* location: settings, conversations and anything the user
     would miss. Regenerable artefacts belong in `cache_dir()`.
+
+    NEVER Path.cwd(): a bare-python run from any directory used to scatter
+    state into whatever folder the shell happened to be in (the audit found
+    five stray logs plus divergent settings files). Flet's launcher always
+    passes an absolute FLET_APP_STORAGE_DATA; a relative one falls through to
+    the home anchor, same guard as DDGS/Sherlock.
     """
     env = os.environ.get("FLET_APP_STORAGE_DATA")
     if env:
-        return Path(env)
-    return Path.cwd()
+        path = Path(env)
+        if path.is_absolute():
+            return path
+    return Path.home() / ".lm_router"
 
 
 def cache_dir() -> Path:
@@ -43,7 +52,13 @@ def settings_path() -> Path:
 
 def conversations_dir() -> Path:
     path = base_dir() / constants.CONVERSATIONS_DIR
-    path.mkdir(parents=True, exist_ok=True)
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Degrade, don't die: list_conversations runs BEFORE the first
+        # paint — a bare mkdir here turned an unwritable data dir into a
+        # permanently blank app (DDGS port; mirrors cache_dir above).
+        return path
     return path
 
 

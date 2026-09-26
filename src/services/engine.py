@@ -8,8 +8,10 @@ and a bundled snapshot would silently shadow it. Everything here is sync urllib
 (anyio study).
 """
 
+import contextlib
 import importlib.util
 import json
+import os
 import re
 import threading
 import urllib.request
@@ -82,14 +84,25 @@ def load_engine() -> tuple[object, str]:
     snapshot that would silently shadow the live router.
     """
     cache = storage.engine_cache_path()
+    # MUST end in .py: spec_from_file_location returns None (no loader) for
+    # unrecognized suffixes, which would reject even a perfect download.
+    tmp = cache.with_name(cache.stem + ".new.py")
     try:
         data = _download(constants.ENGINE_URL)
         version = _validate(data)
         cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_bytes(data)
-        return _load_module(cache), f"fetched {version}"
+        # Prove the download BEFORE touching the cache: a bad upstream that
+        # still passes _validate (main guard + VERSION) used to overwrite the
+        # good copy and then fail to import — permanently bricking offline
+        # starts. Only a loadable download replaces the last-known-good file.
+        tmp.write_bytes(data)
+        module = _load_module(tmp)
+        os.replace(tmp, cache)
+        return module, f"fetched {version}"
     except Exception as exc:
         LOG.warning("engine download unusable (%s); trying last cached copy", exc)
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
     try:
         data = cache.read_bytes()
         version = _validate(data)

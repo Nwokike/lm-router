@@ -133,3 +133,23 @@ def test_null_provider_list_is_survivable(tmp_path, monkeypatch) -> None:
 
 
 import pytest  # noqa: E402
+
+
+def test_base_dir_never_anchors_to_the_cwd(tmp_path, monkeypatch) -> None:
+    """The audit found state scattered across five directories — the fallback
+    is ~/.lm_router, and a RELATIVE env value must not re-anchor to cwd."""
+    from pathlib import Path as _Path
+
+    from core import storage
+
+    monkeypatch.delenv("FLET_APP_STORAGE_DATA", raising=False)
+    assert storage.base_dir() == _Path.home() / ".lm_router"
+
+    monkeypatch.setenv("FLET_APP_STORAGE_DATA", "relative/path")
+    assert storage.base_dir() == _Path.home() / ".lm_router", (
+        "a relative env value must fall back, not follow the shell's cwd"
+    )
+
+    absolute = tmp_path / "data"
+    monkeypatch.setenv("FLET_APP_STORAGE_DATA", str(absolute))
+    assert storage.base_dir() == absolute

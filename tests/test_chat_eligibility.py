@@ -171,3 +171,40 @@ def test_rate_limit_message_degrades_gracefully() -> None:
     # Unknown model, empty catalog: still a sentence, never an exception.
     assert rate_limit_advice("nope", []).startswith("Rate limited")
     assert rate_limit_advice("", _CATALOG).startswith("Rate limited")
+
+
+def test_status_label_translates_untested_to_rate_limited() -> None:
+    """Owner rule: the wire word `untested` is shown as "rate limited" —
+    never raw, never "degraded"."""
+    from core.catalog import status_label
+
+    assert status_label("untested") == "rate limited"
+    assert status_label("UNTESTED") == "rate limited"
+    assert status_label("slow") == "slow"
+    assert status_label("failed") == "failed"
+    assert status_label("active") == "active"
+    assert status_label(None) == "unavailable"
+    assert status_label("") == "unavailable"
+
+
+def test_malformed_rate_metadata_never_raises() -> None:
+    """Remote metadata is untrusted: "lots" used to raise int() inside
+    rate_limit_advice's `except RateLimitError` handler (a SIBLING catch) —
+    the turn died with no error row at all."""
+    from core.catalog import rate_hint_label, rate_limit_suggestion
+
+    broken = {
+        "id": "weird-model",
+        "rate_hint": {"approx_per_hour": "lots", "tier": "free"},
+        "latency_ms": "fast",
+    }
+    label = rate_hint_label(broken)
+    assert isinstance(label, str)
+
+    suggestion = rate_limit_suggestion("other-model", [broken])
+    assert isinstance(suggestion, str)
+
+    from core.catalog import rate_limit_advice
+
+    advice = rate_limit_advice("other-model", [broken])
+    assert isinstance(advice, str) and advice

@@ -110,3 +110,26 @@ def test_tool_is_built_without_side_effects() -> None:
 def test_endpoint_is_the_mcp_server() -> None:
     # The provider is an MCP server; the SDK negotiates the protocol.
     assert "/mcp" in constants.SEARCH_ENDPOINT
+
+
+@pytest.mark.anyio
+async def test_generic_failure_reports_the_real_cause(monkeypatch) -> None:
+    """The fallback used to blame rate limiting for EVERY failure while
+    collecting `errors` and never reading them — a DNS outage told the
+    model a lie."""
+
+    async def _primary(*_a, **_k):
+        raise OSError("search host unreachable")
+
+    async def _broken(*_a, **_k):
+        raise OSError("wikipedia unreachable")
+
+    monkeypatch.setattr("services.search.run_search", _primary)
+    monkeypatch.setattr("services.search.FALLBACKS", (_broken, _broken))
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})),
+    )
+    result = await run_search_with_fallback(HttpService(client=client), query="x", top_k=2)
+    assert "unavailable" in result.lower()
+    assert "rate limited" not in result.lower(), "a non-rate-limit failure must not claim one"
+    assert "wikipedia unreachable" in result, "the first real error must surface"

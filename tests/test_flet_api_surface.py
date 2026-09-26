@@ -99,3 +99,61 @@ def test_dynamic_and_from_imports_exist() -> None:
             if not exists:
                 bad.append(f"{path.relative_to(ROOT)}: getattr(ft.{parent}, {member!r}) missing")
     assert not bad, "Missing dynamic flet references in src/:\n" + "\n".join(bad)
+
+
+def test_constructor_kwargs_exist() -> None:
+    """Every ft.X(...) keyword in src/ must be a real constructor parameter.
+
+    hasattr-style checks cannot see kwargs: TextField(font_family=...) shipped
+    and bricked the Server tab the moment a user enabled "Require API key",
+    because every render test used default settings and the name/enum tests
+    only check that ft.TextField EXISTS. This closes that exact hole.
+    """
+    import ast
+    import inspect
+
+    bad: list[str] = []
+    signatures: dict[str, set[str] | None] = {}
+
+    def _params(name: str) -> set[str] | None:
+        if name not in signatures:
+            cls = getattr(ft, name, None)
+            if cls is None or not callable(cls):
+                signatures[name] = None
+            else:
+                try:
+                    parameters = inspect.signature(cls).parameters
+                except TypeError, ValueError:
+                    signatures[name] = None
+                else:
+                    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+                        signatures[name] = None  # accepts anything
+                    else:
+                        signatures[name] = set(parameters)
+        return signatures[name]
+
+    for path in SRC.rglob("*.py"):
+        if "assets" in path.parts and "engine" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (
+                isinstance(func, ast.Attribute)
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "ft"
+            ):
+                continue
+            accepted = _params(func.attr)
+            if accepted is None:
+                continue  # unknown name / un-signatured / **kwargs: covered above
+            for kw in node.keywords:
+                if kw.arg is None:
+                    continue  # **kwargs splat at the call site
+                if kw.arg not in accepted:
+                    bad.append(
+                        f"{path.relative_to(ROOT)}:{node.lineno} ft.{func.attr}({kw.arg}=...)"
+                    )
+    assert not bad, "Unknown constructor kwargs in src/:\n" + "\n".join(bad)

@@ -463,3 +463,238 @@ def test_server_screen_renders_a_share_card(stub_page):
     component.before_update()
     component._detach_observable_subscriptions()
     component._state.mounted = False
+
+
+def test_server_screen_share_key_branch_renders(stub_page, monkeypatch):
+    """The `require_share_key=True` branch must construct.
+
+    `ft.TextField(font_family=...)` is not a flet 1.0 property — the bare
+    kwarg raised TypeError mid-body, killing the whole Server tab once a user
+    enabled "Require API key", and the switch that turns it off lives inside
+    the same dead body. Every render test used default settings (False), so
+    the gate was asserted closed and never opened.
+    """
+    from test_render import _render, _walk_all
+
+    from core.settings import AppSettings
+    from core.state import state
+    from screens.server_screen import ServerScreen
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    cfg = AppSettings(require_share_key=True, share_key="sk-lm-test-key")
+    monkeypatch.setattr(AppSettings, "load", classmethod(lambda cls: cfg))
+
+    state.gateway_running = True
+    state.gateway_port = 8082
+    state.share_url = ""
+    component = _render(
+        lambda: ControllerMethodsCtx(ControllerMethods(), ServerScreen),
+    )
+    try:
+        fields = [
+            node
+            for node in _walk_all(component)
+            if isinstance(node, ft.TextField) and node.label == "API key"
+        ]
+        assert fields, "require_share_key=True must render the API key field"
+        assert fields[0].text_style is not None
+        assert fields[0].text_style.font_family == "monospace"
+    finally:
+        component._detach_observable_subscriptions()
+        component._state.mounted = False
+
+
+def test_chat_menu_arms_both_triggers_and_dispatches_selection(stub_page):
+    """flet 1.0 ContextMenu: every trigger reads ITS OWN items list.
+
+    `items=` is only used by programmatic `open()`, and touch long-press is
+    additionally gated on `primary_trigger` being armed — the old menu passed
+    only `items=` + `secondary_trigger`, so long-press and right-click fired
+    dismiss with an empty menu and Copy/Edit/Regenerate were unreachable on
+    every platform.
+    """
+    import dataclasses
+
+    from flet.controls.material.context_menu import ContextMenuSelectEvent
+
+    from screens.chat_screen import _with_menu
+
+    fired: list[str] = []
+    control = ft.Container()
+    menu = _with_menu(
+        control,
+        [("Copy", lambda: fired.append("copy")), ("Regenerate", lambda: fired.append("regen"))],
+    )
+    assert isinstance(menu, ft.ContextMenu)
+    assert menu.content is control
+    # Both button-specific lists populated, in the same order as the actions.
+    assert len(menu.primary_items) == 2
+    assert len(menu.secondary_items) == 2
+    assert menu.primary_trigger == ft.ContextMenuTrigger.LONG_PRESS
+    assert menu.secondary_trigger == ft.ContextMenuTrigger.DOWN  # right-click path
+
+    # The event really carries the index _selected reads.
+    fields = {f.name for f in dataclasses.fields(ContextMenuSelectEvent)}
+    assert "item_index" in fields
+
+    # Selection dispatch reaches the right callback; bad indices never raise.
+    menu.on_select(type("E", (), {"item_index": 1})())
+    assert fired == ["regen"]
+    menu.on_select(type("E", (), {"item_index": 9})())
+    menu.on_select(type("E", (), {"item_index": None})())
+    assert fired == ["regen"]
+
+    # Empty actions must not wrap the bubble in a dead menu.
+    assert _with_menu(control, []) is control
+
+
+def test_server_screen_key_warning_matches_the_insecure_state(stub_page, monkeypatch):
+    """The 'No key' warning must show when NO key is required (the insecure
+    default) and vanish when one is — the old condition was inverted, telling
+    users they had no key exactly when they did."""
+    from test_render import _render, _walk_all
+
+    from core.settings import AppSettings
+    from core.state import state
+    from screens.server_screen import ServerScreen
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    state.gateway_running = True
+    state.gateway_port = 8082
+    state.share_url = ""
+
+    def _texts(component) -> str:
+        parts = []
+        for node in _walk_all(component):
+            if isinstance(node, str):
+                parts.append(node)
+            else:
+                value = getattr(node, "value", None)
+                if isinstance(value, str):
+                    parts.append(value)
+        return " ".join(parts)
+
+    # Insecure default: warning present, no key field.
+    monkeypatch.setattr(
+        AppSettings,
+        "load",
+        classmethod(lambda cls: AppSettings(require_share_key=False, share_key="")),
+    )
+    component = _render(
+        lambda: ControllerMethodsCtx(ControllerMethods(), ServerScreen),
+    )
+    try:
+        assert "No key: anyone with the URL can spend" in _texts(component)
+    finally:
+        component._detach_observable_subscriptions()
+        component._state.mounted = False
+
+    # Secure config: warning gone, key field present.
+    monkeypatch.setattr(
+        AppSettings,
+        "load",
+        classmethod(lambda cls: AppSettings(require_share_key=True, share_key="sk-lm-x")),
+    )
+    component = _render(
+        lambda: ControllerMethodsCtx(ControllerMethods(), ServerScreen),
+    )
+    try:
+        assert "No key: anyone with the URL can spend" not in _texts(component)
+        fields = [
+            node
+            for node in _walk_all(component)
+            if isinstance(node, ft.TextField) and node.label == "API key"
+        ]
+        assert fields, "the key field must render when a key is required"
+        # Per-keystroke saves are gone: commit happens on submit/blur.
+        assert fields[0].on_submit is not None
+        assert fields[0].on_blur is not None
+        assert fields[0].on_change is not None  # draft mirror only
+    finally:
+        component._detach_observable_subscriptions()
+        component._state.mounted = False
+
+
+def test_update_dialog_close_runs_the_dismiss_handler(stub_page):
+    """Close must clear the sticky header pill — pop alone never touched
+    state.update_info, so 'Update: X' lived until restart."""
+    from components.update_dialog import build_update_dialog
+
+    closed: list[int] = []
+    dialog = build_update_dialog(
+        stub_page,
+        {"title": "X 2.0", "release_notes": "notes"},
+        None,
+        on_close=lambda: closed.append(1),
+    )
+    close_buttons = [
+        action
+        for action in dialog.actions
+        if isinstance(action, ft.TextButton) and getattr(action, "content", None) == "Close"
+    ]
+    assert close_buttons, "mandatory updates have no Close; optional ones do"
+    close_buttons[0].on_click(None)
+    assert closed == [1], "on_close must run instead of a bare pop"
+
+    # Fallback without a handler still pops and never raises.
+    plain = build_update_dialog(stub_page, {"title": "X 2.0"}, None)
+    plain_close = [
+        action
+        for action in plain.actions
+        if isinstance(action, ft.TextButton) and getattr(action, "content", None) == "Close"
+    ]
+    plain_close[0].on_click(None)
+
+
+def test_autostart_switch_persists_immediately(stub_page, monkeypatch):
+    """Autostart had opposite persistence semantics to Keep-running three
+    rows below (save-on-navigate vs save-now) with no label saying so —
+    flipping it and leaving the screen silently discarded it."""
+    from types import SimpleNamespace
+
+    from test_render import _render, _walk_all
+
+    from core.settings import AppSettings
+    from screens.settings_screen import SettingsScreen
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    monkeypatch.setattr(
+        AppSettings,
+        "load",
+        classmethod(lambda cls: AppSettings()),
+    )
+    calls: list[dict] = []
+    methods = ControllerMethods()
+    methods.save_settings = lambda data: calls.append(dict(data))
+
+    component = _render(lambda: ControllerMethodsCtx(methods, SettingsScreen))
+    try:
+        switches = [node for node in _walk_all(component) if isinstance(node, ft.Switch)]
+        assert switches, "settings screen must render switches"
+        event = SimpleNamespace(control=SimpleNamespace(value=True))
+        for switch in switches:
+            if switch.on_change is not None:
+                switch.on_change(event)
+        assert {"gateway_autostart": True} in calls, (
+            f"the Autostart switch did not persist immediately; calls={calls}"
+        )
+
+        # Save-gateway writes the port ONLY — _set_autostart is the single
+        # writer for gateway_autostart.
+        for node in _walk_all(component):
+            if (
+                isinstance(node, ft.FilledButton)
+                and getattr(node, "content", None) == "Save gateway"
+            ):
+                node.on_click(None)
+                break
+        else:
+            raise AssertionError("Save gateway button not found")
+        gateway_calls = [c for c in calls if "gateway_port" in c]
+        assert gateway_calls, "Save gateway must persist the port"
+        assert all("gateway_autostart" not in c for c in gateway_calls), (
+            "gateway_autostart must have a single writer (_set_autostart)"
+        )
+    finally:
+        component._detach_observable_subscriptions()
+        component._state.mounted = False

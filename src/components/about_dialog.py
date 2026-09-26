@@ -1,7 +1,8 @@
-"""About dialog: version, build, engine provenance and licences.
+"""About dialog: version, build, and engine provenance.
 
-Opened by tapping the version chip in the header, which previously did
-nothing at all. Also reachable from Settings > About.
+Opened by tapping the version chip in the header. No licence block: the
+owner dropped licence lines from every About surface (the Settings About
+card carries the same rule) — attribution lives in the README instead.
 """
 
 from __future__ import annotations
@@ -36,15 +37,6 @@ def build_about_dialog(
     engine_source = state.gateway_source or "not started"
     gateway = "running" if state.gateway_running else "stopped"
 
-    licences = "\n".join(
-        [
-            "Flet · flet-ads · flet-cli (Apache-2.0)",
-            "kani (MIT)",
-            "mcp Python SDK (MIT)",
-            "Kiri Router gateway (router.kiri.ng, stdlib only)",
-        ],
-    )
-
     def _open(event: object) -> None:
         methods.open_url(constants.GITHUB_RELEASE_URL)
 
@@ -72,8 +64,6 @@ def build_about_dialog(
                     _row("Version", constants.APP_VERSION, is_dark),
                     _row("Build", str(constants.BUILD_NUMBER), is_dark),
                     _row("Gateway", f"{gateway} · {engine_source}", is_dark),
-                    ft.Divider(height=1, color=theme.border(is_dark)),
-                    theme.markdown(licences, is_dark=is_dark, selectable=True),
                 ],
             ),
         ),

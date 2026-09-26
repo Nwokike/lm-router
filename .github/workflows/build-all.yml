@@ -35,8 +35,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
-      - name: Install dependencies (incl. dev group)
-        run: uv sync
+      - name: Install dependencies (frozen lockfile, includes dev group)
+        run: uv sync --frozen
       - name: Version consistency (pyproject vs workflow; version.json may be held back)
         run: |
           uv run python - <<'PY'
@@ -175,6 +175,11 @@ jobs:
           FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: uv run flet build apk --yes --project lm-router --product "LM Router" --org ng.kiri --company "Kiri Research Labs" --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} --split-per-abi -v
+      - name: Size report
+        # Measurement first: a cleanup.package_files prune set (Sherlock's
+        # pattern, enforced by a hard CI grep) follows once these numbers
+        # exist — the dep tree is the largest in the house (75 packages).
+        run: ls -lh build/apk/*.apk
       - name: Upload directly to GitHub Release
         if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2

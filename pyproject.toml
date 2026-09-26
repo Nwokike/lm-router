@@ -38,6 +38,14 @@ path = "src"
 color = "#ffffff"
 dark_color = "#0a0a0a"
 
+# Cold start shows a message instead of a blank screen while the gateway
+# spawns (Sherlock/DDGS shape; distinct from the banned legacy
+# [tool.flet.app.boot_screen] key pinned by test_version_sync).
+[tool.flet.boot_screen]
+name = "flet"
+[tool.flet.boot_screen.flet]
+startup_message = "Starting LM Router..."
+
 [tool.flet.deep_linking]
 scheme = "lmrouter"
 host = "app"
@@ -74,6 +82,17 @@ app = true
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+addopts = ["-ra"]
+strict_markers = true
+strict_config = true
+filterwarnings = [
+    # Owner rule: NEVER suppress/ignore warnings. Any warning raised by OUR
+    # code (module-scoped below) escalates to a hard error so it must be
+    # fixed. Third-party warnings are left at default — they stay visible in
+    # pytest's warnings summary on every run, never ignored, but cannot
+    # brick the suite for code we don't own.
+    "error:::^(services|screens|components|core|state|tests)(\\.|$)|^(app_shell|main)$",
+]
 
 [tool.ruff]
 line-length = 100
@@ -88,5 +107,3 @@ select = ["E", "F", "W", "I", "UP", "S", "RUF", "SIM105"]
 # Tests assert by design; stub excepts are intentional; dummy secrets appear
 # in security-test fixtures on purpose.
 "tests/*" = ["S101", "S105", "S110", "S112"]
-# Prints ARE the CLI interface for scripts (progress + errors to stdout).
-"scripts/*" = ["T201"]

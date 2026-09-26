@@ -380,3 +380,50 @@ def test_context_budget_preflight_truncates_oversized_history(monkeypatch) -> No
         assert len(kani.chat_history) < initial_len
     finally:
         agent.stop()
+
+
+def test_retry_and_context_settings_rebuild_the_engine() -> None:
+    """tool_retry_attempts and max_context_tokens are read ONLY at Kani/
+    engine construction — absent from the reuse key, changing them silently
+    did nothing for the whole session (verified: same kani came back)."""
+    builds: list[int] = []
+
+    client = openai.AsyncOpenAI(
+        base_url="http://gateway.test/v1",
+        api_key="test",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"choices": []})),
+        ),
+    )
+    from kani.engines.openai import OpenAIEngine
+
+    settings = AppSettings()
+
+    def factory(s: AppSettings, model: str) -> OpenAIEngine:
+        builds.append(1)
+        return OpenAIEngine(
+            client=client,
+            model=model,
+            api_type="chat_completions",
+            max_context_size=4096,
+        )
+
+    agent = AgentService(settings, engine_factory=factory)
+    try:
+        assert agent.ensure_kani("m", "sys") is not None
+        assert len(builds) == 1
+        assert agent.ensure_kani("m", "sys") is not None
+        assert len(builds) == 1, "identical settings must reuse the kani"
+
+        settings.tool_retry_attempts = 3
+        assert agent.ensure_kani("m", "sys") is not None
+        assert len(builds) == 2, "tool_retry_attempts is build-time only — must rebuild"
+
+        settings.max_context_tokens = 64_000
+        assert agent.ensure_kani("m", "sys") is not None
+        assert len(builds) == 3, "max_context_tokens is build-time only — must rebuild"
+
+        assert agent.ensure_kani("m", "sys") is not None
+        assert len(builds) == 3, "identical again must reuse"
+    finally:
+        agent.stop()

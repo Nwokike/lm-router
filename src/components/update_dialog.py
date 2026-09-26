@@ -1,5 +1,7 @@
 """Update / release notes dialog (FFmpeg port): GITHUB_WEB markdown body."""
 
+from collections.abc import Callable
+
 import flet as ft
 
 from core import constants, theme, tokens
@@ -12,6 +14,7 @@ def build_update_dialog(
     page: ft.Page,
     update_data: dict | None = None,
     url_launcher: object | None = None,
+    on_close: Callable[[], None] | None = None,
 ) -> ft.AlertDialog:
     is_update = update_data is not None
     title = (update_data or {}).get("title") or f"{constants.APP_NAME} {constants.APP_VERSION}"
@@ -35,14 +38,22 @@ def build_update_dialog(
         url = play_url if page.platform and page.platform.is_mobile() and play_url else github_url
         _launch(url)
 
+    def _close(_: object) -> None:
+        # The caller's handler owns pop + state clear (it dismisses the
+        # header's sticky "Update: X" chip, which pop alone never touched).
+        if on_close is not None:
+            on_close()
+        else:
+            page.pop_dialog()
+
     actions = [
         ft.FilledButton(
-            "Download Update" if is_update else "View on GitHub",
+            "Download update" if is_update else "View on GitHub",
             on_click=_open_download,
         ),
     ]
     if not is_mandatory:
-        actions.append(ft.TextButton("Close", on_click=lambda _: page.pop_dialog()))
+        actions.append(ft.TextButton("Close", on_click=_close))
 
     return ft.AlertDialog(
         modal=is_mandatory,

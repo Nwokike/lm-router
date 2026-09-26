@@ -9,6 +9,7 @@ from components.chat_controls import Composer, SessionBar
 from components.thinking import ThinkingBlock, ToolCallBlock
 from core import theme as app_theme
 from core import tokens
+from core.catalog import rate_limit_suggestion
 from core.state import AppStateCtx
 from state.controller_ctx import ControllerMethodsCtx
 
@@ -81,8 +82,45 @@ def _with_menu(control: ft.Control, actions: list[tuple[str, Callable[[], None]]
     return ft.ContextMenu(
         content=control,
         items=items,
-        secondary_trigger=ft.ContextMenuTrigger.LONG_PRESS,
+        # Each trigger reads ITS OWN list in flet 1.0 (`items=` is used only
+        # by programmatic open()), and the touch path additionally requires
+        # primary_trigger to be armed — with either missing, long-press and
+        # right-click silently fire dismiss with an empty menu.
+        primary_items=items,
+        primary_trigger=ft.ContextMenuTrigger.LONG_PRESS,
+        secondary_items=items,
         on_select=_selected,
+    )
+
+
+# Label → icon for the visible action row (DDGS ships the same three).
+_ACTION_ICONS = {
+    "Copy": ft.Icons.CONTENT_COPY_ROUNDED,
+    "Edit & resend": ft.Icons.EDIT_ROUNDED,
+    "Regenerate": ft.Icons.REFRESH_ROUNDED,
+}
+
+
+def _action_row(actions: list[tuple[str, Callable[[], None]]]) -> ft.Control:
+    """Visible Copy/Edit/Regenerate buttons under a bubble.
+
+    DDGS renders these as a plain row because long press alone is not
+    discoverable and has no keyboard equivalent; the gesture menu stays as
+    a shortcut, this row is the primary path. Empty actions yield an empty
+    row so callers don't need a branch.
+    """
+    return ft.Row(
+        spacing=0,
+        controls=[
+            ft.IconButton(
+                _ACTION_ICONS.get(label, ft.Icons.MORE_HORIZ),
+                icon_size=tokens.ICON_SM,
+                icon_color=ft.Colors.ON_SURFACE_VARIANT,
+                tooltip=label,
+                on_click=lambda _e, cb=callback: cb(),
+            )
+            for label, callback in actions
+        ],
     )
 
 
@@ -138,6 +176,40 @@ def ChatScreen():
         ],
     )
 
+    def _error_actions(kind: str) -> list[ft.Control]:
+        """Recovery affordances for a failed turn (DDGS parity).
+
+        A dead red line tells the user nothing about what to do next; every
+        error kind names its own way forward. Rows without a kind (legacy)
+        render unchanged.
+        """
+        if not kind:
+            return []
+        if kind == "rate_limited":
+            suggestion = rate_limit_suggestion(state.model, state.models)
+            if suggestion:
+
+                def _switch_and_retry(*_a: object, s: str = suggestion) -> None:
+                    methods.set_model(s)
+                    methods.regenerate_last()
+
+                return [
+                    ft.TextButton(
+                        f"Use {suggestion} and retry",
+                        on_click=_switch_and_retry,
+                    ),
+                ]
+        if kind == "offline":
+            return [
+                ft.TextButton(
+                    "Start gateway",
+                    on_click=lambda *_a: methods.start_gateway(),
+                ),
+            ]
+        return [
+            ft.TextButton("Try again", on_click=lambda *_a: methods.regenerate_last()),
+        ]
+
     rows: list[ft.Control] = []
     last_index = len(state.messages) - 1
     last_user_index = max(
@@ -179,7 +251,16 @@ def ChatScreen():
                 ft.Row(
                     expand=True,
                     alignment=ft.MainAxisAlignment.END,
-                    controls=[_with_menu(bubble, user_actions)],
+                    controls=[
+                        ft.Column(
+                            spacing=tokens.SPACE_XXS,
+                            horizontal_alignment=ft.CrossAxisAlignment.END,
+                            controls=[
+                                _with_menu(bubble, user_actions),
+                                _action_row(user_actions),
+                            ],
+                        ),
+                    ],
                 ),
             )
         elif role == "tool":
@@ -193,15 +274,28 @@ def ChatScreen():
             )
         elif role == "error":
             rows.append(
-                ft.Row(
-                    spacing=tokens.SPACE_SM,
+                ft.Column(
+                    spacing=tokens.SPACE_XXS,
                     controls=[
-                        ft.Icon(ft.Icons.ERROR, size=tokens.ICON_SM, color=ft.Colors.ERROR),
-                        ft.Text(
-                            content,
-                            size=tokens.FONT_MD,
-                            color=ft.Colors.ERROR,
-                            selectable=True,
+                        ft.Row(
+                            spacing=tokens.SPACE_SM,
+                            controls=[
+                                ft.Icon(
+                                    ft.Icons.ERROR,
+                                    size=tokens.ICON_SM,
+                                    color=ft.Colors.ERROR,
+                                ),
+                                ft.Text(
+                                    content,
+                                    size=tokens.FONT_MD,
+                                    color=ft.Colors.ERROR,
+                                    selectable=True,
+                                ),
+                            ],
+                        ),
+                        ft.Row(
+                            spacing=tokens.SPACE_XS,
+                            controls=_error_actions(str(message.get("kind") or "")),
                         ),
                     ],
                 ),
@@ -246,15 +340,8 @@ def ChatScreen():
             meta_controls: list[ft.Control] = []
             if caption is not None:
                 meta_controls.append(caption)
-            if content and not placeholder:
-                meta_controls.append(
-                    ft.IconButton(
-                        ft.Icons.CONTENT_COPY_ROUNDED,
-                        icon_size=tokens.ICON_XS,
-                        tooltip="Copy message",
-                        on_click=lambda e, txt=content: methods.copy_text(txt),
-                    ),
-                )
+            # Copy lives in the visible action row below (one copy path, the
+            # DDGS model) — no second button here.
 
             assistant_controls: list[ft.Control] = []
             # Reasoning sits ABOVE the answer and collapses itself the moment
@@ -271,29 +358,35 @@ def ChatScreen():
                 )
             assistant_controls.append(body)
 
-            asst_actions: list[tuple[str, Callable[[], None]]] = [
-                ("Copy", lambda c=content: methods.copy_text(c))
-            ]
+            asst_actions: list[tuple[str, Callable[[], None]]] = []
+            if content:
+                asst_actions.append(("Copy", lambda c=content: methods.copy_text(c)))
             if index == last_assistant_index and not state.busy:
                 asst_actions.append(("Regenerate", lambda: methods.regenerate_last()))
             rows.append(
-                _with_menu(
-                    ft.Column(
-                        spacing=tokens.SPACE_XS,
-                        controls=assistant_controls
-                        + (
-                            [
-                                ft.Row(
-                                    spacing=tokens.SPACE_XS,
-                                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                                    controls=meta_controls,
+                ft.Column(
+                    spacing=tokens.SPACE_XXS,
+                    controls=[
+                        _with_menu(
+                            ft.Column(
+                                spacing=tokens.SPACE_XS,
+                                controls=assistant_controls
+                                + (
+                                    [
+                                        ft.Row(
+                                            spacing=tokens.SPACE_XS,
+                                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                            controls=meta_controls,
+                                        ),
+                                    ]
+                                    if meta_controls
+                                    else []
                                 ),
-                            ]
-                            if meta_controls
-                            else []
+                            ),
+                            asst_actions,
                         ),
-                    ),
-                    asst_actions,
+                        _action_row(asst_actions),
+                    ],
                 ),
             )
             assistant_replies += 1

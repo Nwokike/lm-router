@@ -123,6 +123,18 @@ graph TB
 
 ---
 
+## Development
+
+```
+uv sync                                   # install venv (dev group included)
+uv run ruff check src tests               # lint (same paths CI lints)
+uv run ruff format --check src tests      # format gate (same as CI)
+uv run pytest -q                          # test suite
+uv run flet run -v                        # run desktop app
+uv run flet clean                         # delete build/ (Flutter shell + staged python)
+uv run flet build apk --split-per-abi -v  # Android (matches CI)
+```
+
 ## Privacy & Security
 
 1. **On your device**: the gateway runs locally, binds only to `127.0.0.1`, and conversation history and settings stay on this machine.

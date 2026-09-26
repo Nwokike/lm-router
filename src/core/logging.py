@@ -18,7 +18,7 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 
 REDACTIONS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"bearer\s+[A-Za-z0-9\-._~+/=]+", re.IGNORECASE), "Bearer [REDACTED]"),
-    (re.compile(r"sk-[A-Za-z0-9]{8,}"), "sk-[REDACTED]"),
+    (re.compile(r"sk-[A-Za-z0-9_-]{8,}"), "sk-[REDACTED]"),  # sk-proj-/sk-ant- include "-"
     (re.compile(r"xox[bpas]-[A-Za-z0-9-]+"), "[REDACTED]"),
     (re.compile(r"AKIA[0-9A-Z]{16}"), "[REDACTED]"),
     (

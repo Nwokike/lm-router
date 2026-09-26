@@ -27,3 +27,37 @@ smoke_debug.py
 
 # ZCode session scratch (plans, local state) — not part of the project
 .zcode/
+
+# Signing keystore — CI writes this file to the repo root (build-all.yml
+# Decode Keystore); all three reference repos ignore it. Committing it would
+# publish the Play Store upload key.
+kiri_keystore.jks
+upload-key.jks
+
+# OS / tooling debris
+.DS_Store
+Thumbs.db
+*.spec
+
+# Local runtime + scratch (declared, not incidental — the audit found state
+# scattered by CWD-relative paths)
+cache/
+.tmpw/
+*.log
+
+# Signing keystore — CI writes this file to the repo root (build-all.yml
+# Decode Keystore); all three reference repos ignore it. Committing it would
+# publish the Play Store upload key.
+kiri_keystore.jks
+upload-key.jks
+
+# OS / tooling debris
+.DS_Store
+Thumbs.db
+*.spec
+
+# Local runtime + scratch (declared, not incidental — the audit found state
+# scattered by CWD-relative paths)
+cache/
+.tmpw/
+*.log

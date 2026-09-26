@@ -374,3 +374,67 @@ async def test_tool_names_use_the_configured_server_name(monkeypatch) -> None:
 
     # Our name wins, so disabled_tools=["some_tool"] actually matches.
     assert seen_prefixes == ["my-docs.some_tool"]
+
+
+@pytest.mark.anyio
+async def test_serve_handles_empty_config_and_stops_cleanly() -> None:
+    """serve() is now spawned on EVERY boot, so it must tolerate no servers.
+
+    The owner loop with an empty config short-circuits in _connect (one
+    generation bump, then parks on the reconnect wait) and must exit through
+    _close_owned() once stopped — this is the path the unconditional boot
+    spawn exercises on a fresh install.
+    """
+    statuses: list = []
+    hub = MCPHub(AppSettings(), is_mobile=False, on_status=lambda *a: statuses.append(a))
+
+    import asyncio
+
+    task = asyncio.ensure_future(hub.serve())
+    await asyncio.sleep(0.3)
+    assert hub.generation >= 1, "empty config must still complete a connect pass"
+    assert hub.tools == []
+
+    hub.request_stop()
+    await asyncio.wait_for(task, timeout=5)
+    # Owner exited through its cleanup path with nothing leaked.
+    assert hub._contexts == []
+
+
+@pytest.mark.anyio
+async def test_serve_cancellation_still_closes_contexts(monkeypatch) -> None:
+    """serve()'s finally must unwind entered contexts on cancellation.
+
+    The contexts are entered MANUALLY (stored in _contexts), so they sit on
+    no stack frame — without the finally, a portal teardown mid-wait
+    abandoned every session group and any stdio child process.
+    """
+    import asyncio
+    import contextlib
+
+    hub = MCPHub(AppSettings(), is_mobile=False, on_status=lambda *a: None)
+    closed = {"n": 0}
+
+    @contextlib.asynccontextmanager
+    async def _spy():
+        try:
+            yield ["spy-tool"]
+        finally:
+            closed["n"] += 1
+
+    async def _fake_connect() -> None:
+        context = _spy()
+        await context.__aenter__()
+        hub._contexts.append(context)
+        hub.generation += 1
+
+    monkeypatch.setattr(hub, "_connect", _fake_connect)
+    task = asyncio.ensure_future(hub.serve())
+    await asyncio.sleep(0.2)  # connect, then park on the reconnect wait
+    assert hub._contexts, "precondition: a context is entered"
+
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    assert closed["n"] == 1, "cancellation must still run the owner's cleanup"
+    assert hub._contexts == []

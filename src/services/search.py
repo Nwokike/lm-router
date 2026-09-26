@@ -170,9 +170,11 @@ FALLBACKS = (_wikipedia_fallback, _duckduckgo_fallback)
 
 async def run_search_with_fallback(http: HttpService, query: str, top_k: int = 5) -> str:
     """Primary hosted search, then keyless sources when it is unavailable."""
+    primary_limited = False
     try:
         return await run_search(http, query, top_k)
     except SearchRateLimited:
+        primary_limited = True
         LOG.warning("search provider rate limited; trying fallback sources")
     except Exception as exc:
         LOG.warning("search provider failed (%s); trying fallback sources", exc)
@@ -187,10 +189,20 @@ async def run_search_with_fallback(http: HttpService, query: str, top_k: int = 5
             continue
         if result:
             return result
+    if primary_limited:
+        # The provider itself said the free tier is exhausted — the only
+        # case where "rate limited" is the truth.
+        return (
+            "Web search is rate limited right now (the free search provider "
+            "is exhausted). Answer from your own knowledge and say the search "
+            "was unavailable."
+        )
+    detail = errors[0] if errors else "no reachable search backend"
+    # The old copy blamed rate limiting for EVERY failure while collecting
+    # `errors` and never reading them — a DNS failure told the model a lie.
     return (
-        "Web search is unavailable right now (the free search provider is rate "
-        "limited). Answer from your own knowledge and say the search was "
-        "unavailable."
+        f"Web search is unavailable right now ({detail}). Answer from your "
+        "own knowledge and say the search was unavailable."
     )
 
 

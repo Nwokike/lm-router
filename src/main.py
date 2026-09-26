@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from app_shell import AppShell
 from components.about_dialog import build_about_dialog
-from components.connectivity_monitor import start_connectivity_monitor
+from components.connectivity_monitor import recheck_connectivity, start_connectivity_monitor
 from components.log_terminal import build_log_terminal
 from components.update_dialog import build_update_dialog
 from core import constants, theme
@@ -66,6 +66,8 @@ class AppController:
         self._share: ShareSession | None = None
         self._tunnel: LocalTunnel | None = None
         self._share_url = ""
+        self._quitting = False  # run-once guard: on_close + Quit can race
+        self._back_seq = 0  # route re-key counter for view_pop restores
         # flet page context captured at init: chat callbacks run on the anyio
         # portal thread, which has no context of its own (kani thread study).
         self._flet_ctx = contextvars.copy_context()
@@ -95,6 +97,10 @@ class AppController:
         state.onboarding_done = settings.onboarding_done
         state.terms_accepted = settings.terms_accepted
         state.search_enabled = settings.search_enabled
+        # Remembered model before any catalog arrives: a running gateway
+        # whose /models fetch failed used to fail every send with "No model
+        # selected yet." even though last_model was known.
+        state.model = settings.last_model or ""
 
         # Surface anything load() had to skip/drop (dropped provider keys,
         # malformed stored items) — never silently lose user data state.
@@ -124,6 +130,19 @@ class AppController:
             page.on_error = self._on_page_error
         except Exception as exc:
             LOG.info("page error hook unavailable: %s", exc)
+
+        # Lifecycle: flet 1.0 exits without running atexit/buffered writes
+        # (DDGS), and on Android these are the ONLY teardown signals — the
+        # window.on_event hook above is desktop-gated. on_close/on_disconnect
+        # are session events (web/session-expiry) and double as the desktop
+        # safety net; both handlers are idempotent.
+        try:
+            page.on_view_pop = self._on_view_pop
+            page.on_app_lifecycle_state_change = self._on_lifecycle
+            page.on_close = self._quit_app
+            page.on_disconnect = self._on_disconnect
+        except Exception as exc:
+            LOG.info("lifecycle hooks unavailable: %s", exc)
 
         # services
         http = HttpService()
@@ -155,14 +174,23 @@ class AppController:
         except Exception as exc:
             LOG.info("haptics unavailable: %s", exc)
 
-        # conversation catalog on boot, fresh id for new chats
-        state.conversations = history.list_conversations()
+        # Conversation catalog OFF the UI thread: list_conversations parses
+        # every conversation file (O(n x size)) and init() runs before the
+        # first paint — DDGS moved the identical call for the identical
+        # reason. The fresh id is a cheap uuid and can stay synchronous.
+        page.run_task(self._boot_conversations)
         if not state.active_conversation:
             history.start_conversation()
 
         # connectivity: OS events + HTTP confirm, banner rendered by the shell
         try:
-            page.services.append(ft.Connectivity())
+            conn = ft.Connectivity()
+            page.services.append(conn)
+            # flet 1.0 never sets page.connectivity itself (Connectivity is a
+            # Service; register_service only appends) — bind it here so the
+            # monitor's fast path and on_change wiring actually run, the way
+            # all three references retain the handle.
+            page.connectivity = conn
         except Exception as exc:
             LOG.info("connectivity service unavailable: %s", exc)
         page.run_task(start_connectivity_monitor, page)
@@ -174,13 +202,13 @@ class AppController:
 
         # MCP owner task: ONE long-lived portal task owns the session
         # context (enter+exit in the same task). Config changes just signal
-        # it; it never shares a cancel scope across portal tasks.
-        if settings.mcp_servers:
-            try:
-                self._mcp_future = agent.spawn(hub.serve)
-            except Exception as exc:
-                LOG.warning("mcp owner task not started: %s", exc)
-                self._notify_error(f"MCP subsystem unavailable: {str(exc)[:150]}")
+        # it; it never shares a cancel scope across portal tasks. Spawned
+        # UNCONDITIONALLY — with the old `if settings.mcp_servers:` guard a
+        # fresh install had no consumer for request_reconnect(), so the first
+        # server added was silently dead until restart. An empty config is a
+        # no-op inside _connect() (it short-circuits and the loop parks).
+        agent.on_portal_restart = self._ensure_mcp_owner
+        self._ensure_mcp_owner()
 
         # controllers wired for this step (later steps extend the same object)
         m = self.methods
@@ -526,6 +554,15 @@ class AppController:
 
     def _stop_gateway(self) -> None:
         def work() -> None:
+            # The share card unmounts with the gateway (gated on `running`),
+            # so the session must die with it — a live tunnel would keep
+            # answering 502 with no UI left to stop it, and the stale
+            # share_url would resurface as "Stop sharing" on restart.
+            try:
+                if self._share is not None or self._tunnel is not None:
+                    self._in_flet_ctx(self._stop_share)()
+            except Exception as exc:
+                LOG.debug("share stop on gateway stop: %s", exc)
             self.services.engine.stop()
             state.gateway_lan_url = ""
             state.gateway_lan_ip = ""
@@ -669,9 +706,9 @@ class AppController:
     def _reset_busy(self) -> None:
         state.busy = False
 
-    def _send_failed(self, content: str) -> None:
+    def _send_failed(self, content: str, kind: str = "setup") -> None:
         state.busy = False
-        state.messages.append({"role": "error", "content": content})
+        state.messages.append({"role": "error", "content": content, "kind": kind})
 
     def _begin_turn(self, text: str) -> int | None:
         if self._stop_requested or not state.busy:
@@ -709,7 +746,11 @@ class AppController:
             return
         if not state.gateway_running:
             state.messages.append(
-                {"role": "error", "content": "Gateway is not running. Start it on the Server tab."},
+                {
+                    "role": "error",
+                    "content": "Gateway is not running. Start it on the Server tab.",
+                    "kind": "offline",
+                },
             )
             return
         state.busy = True
@@ -725,6 +766,17 @@ class AppController:
             LOG.error("send dispatch failed: %s", exc)
             state.busy = False
             self._notify_error(f"Could not start the request: {str(exc)[:150]}")
+
+    def _arm_turn(self) -> None:
+        """Set the turn flags exactly as _send_message does before dispatch.
+
+        _begin_turn refuses any dispatch where busy is False (or a stale
+        _stop_requested survives), so retry paths that skip this land on a
+        silent no-op AFTER _truncate_for_retry already destroyed the last
+        exchange — the user watches their message vanish with no send.
+        """
+        state.busy = True
+        self._stop_requested = False
 
     def _truncate_for_retry(self) -> str:
         """Roll the conversation back to before the last user turn — the UI
@@ -751,7 +803,7 @@ class AppController:
             self._notify_info("Stop the current generation first.")
             return
         if not state.gateway_running:
-            self._notify_error("The gateway is not running.")
+            self._notify_error("Gateway is not running. Start it on the Server tab.")
             return
 
         def work() -> None:
@@ -759,6 +811,7 @@ class AppController:
             if not text.strip():
                 self._notify_error("Nothing to regenerate yet.")
                 return
+            self._in_flet_ctx(self._arm_turn)()
             self._send_message_worker(text)
 
         self.page.run_thread(work)
@@ -769,11 +822,12 @@ class AppController:
         if not new_text or state.busy:
             return
         if not state.gateway_running:
-            self._notify_error("The gateway is not running.")
+            self._notify_error("Gateway is not running. Start it on the Server tab.")
             return
 
         def work() -> None:
             self._in_flet_ctx(self._truncate_for_retry)()
+            self._in_flet_ctx(self._arm_turn)()
             self._send_message_worker(new_text)
 
         self.page.run_thread(work)
@@ -869,6 +923,7 @@ class AppController:
                         "Pick another model (the picker lists active chat models only) "
                         "or hit Refresh models on the Server tab."
                     ),
+                    "kind": "empty",
                     "reasoning": buffer["thought"],
                 }
                 state.busy = False
@@ -897,10 +952,10 @@ class AppController:
                 state.messages[index] = {**state.messages[index], "stopped": True}
             elif buffer["text"]:
                 flush()
-                state.messages.append({"role": "error", "content": content})
+                state.messages.append({"role": "error", "content": content, "kind": kind})
                 LOG.warning("turn error (%s): %s", kind, content)
             else:
-                state.messages[index] = {"role": "error", "content": content}
+                state.messages[index] = {"role": "error", "content": content, "kind": kind}
                 LOG.warning("turn error (%s): %s", kind, content)
             state.busy = False
 
@@ -941,11 +996,11 @@ class AppController:
             items = await asyncio.to_thread(history.list_conversations)
         except Exception as exc:
             LOG.warning("conversation save failed: %s", exc)
-            self._notify_error("Conversation not saved. Check disk space. See logs.")
+            self._notify_error("Conversation not saved. Check disk space. See the Activity log.")
             return
         state.conversations = items
         if not ok:
-            self._notify_error("Conversation not saved. Check disk space. See logs.")
+            self._notify_error("Conversation not saved. Check disk space. See the Activity log.")
 
     # ── sharing the gateway with someone else ───────────────────────────
     #
@@ -957,12 +1012,16 @@ class AppController:
     def _regenerate_share_key(self) -> None:
         self.settings.share_key = generate_key()
         self.settings.save()
+        # The key field AND the Copy button read the settings_version-keyed
+        # snapshot — without the bump they kept showing the OLD key while
+        # the snackbar claimed a new one.
+        state.settings_version += 1
         LOG.info("share key regenerated")
         self._notify_info("New key generated. Copy it to the other client.")
 
     def _start_share(self) -> None:
         if not state.gateway_running:
-            self._notify_error("Start the gateway first.")
+            self._notify_error("Gateway is not running. Start it on the Server tab.")
             return
         if self._share is not None:
             self._stop_share()
@@ -981,6 +1040,7 @@ class AppController:
         if self.settings.require_share_key and not key:
             self.settings.share_key = key = generate_key()
             self.settings.save()
+            state.settings_version += 1  # same snapshot rule as regenerate
 
         def _mark_starting() -> None:
             state.share_starting = True
@@ -1080,6 +1140,7 @@ class AppController:
         self._share_url = ""
         state.share_url = ""
         state.share_starting = False
+        state.share_error = ""  # a cleared session must not keep a red banner
         if tunnel is not None:
             tunnel.stop()
         if session is not None:
@@ -1124,6 +1185,23 @@ class AppController:
         """The stored prompt, plus a clock line when the user opted in."""
         return with_clock(self.settings.system_prompt, self.settings.tell_model_time)
 
+    def _ensure_mcp_owner(self) -> None:
+        """Spawn the MCP owner task unless one is already running.
+
+        Idempotent; called at boot, from every MCP settings mutation (via
+        _reapply_mcp) and after every portal restart (via the agent's
+        on_portal_restart callback). The old future reports done() once its
+        portal died, which is exactly when a respawn is required.
+        """
+        future = self._mcp_future
+        if future is not None and not future.done():
+            return
+        try:
+            self._mcp_future = self.services.agent.spawn(self.services.mcp.serve)
+        except Exception as exc:
+            LOG.warning("mcp owner task not started: %s", exc)
+            self._notify_error(f"MCP subsystem unavailable: {str(exc)[:150]}")
+
     def _reapply_mcp(self) -> None:
         """Signal the MCP owner task (thread-safe, instant).
 
@@ -1132,7 +1210,10 @@ class AppController:
         task group ("cancel scope in a different task") and permanently
         bricks the agent portal — chat then never runs again (boot-diff
         reproduction: an enabled unreachable server killed every send).
+        A live owner task is the precondition for the signal to mean
+        anything, so ensure it first.
         """
+        self._ensure_mcp_owner()
         self.services.mcp.request_reconnect()
 
     def _mcp_status(self, names: list[str] | None, error: str | None) -> None:
@@ -1168,11 +1249,19 @@ class AppController:
             self._notify_error(f"MCP server rejected: {str(exc)[:200]}")
             return
         self.settings.save()
+        # The Settings MCP list re-reads only on this snapshot bump — without
+        # it, add/remove/toggle saved to disk but the list stayed stale until
+        # a tab switch remounted the screen.
+        state.settings_version += 1
         self._reapply_mcp()
 
     def _remove_mcp_server(self, server_id: str) -> None:
         self.settings.mcp_servers = [s for s in self.settings.mcp_servers if s.id != server_id]
         self.settings.save()
+        # The Settings MCP list re-reads only on this snapshot bump — without
+        # it, add/remove/toggle saved to disk but the list stayed stale until
+        # a tab switch remounted the screen.
+        state.settings_version += 1
         self._reapply_mcp()
 
     def _toggle_mcp_server(self, server_id: str) -> None:
@@ -1180,6 +1269,10 @@ class AppController:
             if server.id == server_id:
                 server.enabled = not server.enabled
         self.settings.save()
+        # The Settings MCP list re-reads only on this snapshot bump — without
+        # it, add/remove/toggle saved to disk but the list stayed stale until
+        # a tab switch remounted the screen.
+        state.settings_version += 1
         self._reapply_mcp()
 
     def _toggle_mcp_tool(self, server_id: str, tool_name: str) -> None:
@@ -1190,6 +1283,10 @@ class AppController:
                 else:
                     server.disabled_tools.append(tool_name)
         self.settings.save()
+        # The Settings MCP list re-reads only on this snapshot bump — without
+        # it, add/remove/toggle saved to disk but the list stayed stale until
+        # a tab switch remounted the screen.
+        state.settings_version += 1
         self._reapply_mcp()
 
     def _test_mcp_server(self, server_id: str, done_cb) -> None:
@@ -1294,6 +1391,11 @@ class AppController:
             return
         self.settings.save()
         state.settings_version += 1
+        if "search_enabled" in updates:
+            # The chat pill reads the observable, not the settings model —
+            # without this the Settings switch and the pill disagreed until
+            # restart (the chat-side toggle writes both).
+            state.search_enabled = self.settings.search_enabled
 
     def _add_provider(self, data: dict) -> None:
         name = str(data.get("name", "")).strip()
@@ -1333,7 +1435,26 @@ class AppController:
         state.settings_version += 1
         LOG.info("active provider: %s", provider_id)
 
+    async def _boot_conversations(self) -> None:
+        """Load the conversation list off the UI thread (runs on the loop).
+
+        Disk work during init delays the app appearing; state lands directly
+        because run_task coroutines already execute on the Flet loop.
+        """
+        try:
+            items = await asyncio.to_thread(history.list_conversations)
+        except Exception as exc:
+            LOG.warning("conversation list failed: %s", exc)
+            return
+        state.conversations = items
+
     def _clear_history(self) -> None:
+        if state.busy:
+            # The in-flight turn would rewrite the file just cleared —
+            # refuse with a reason instead of racing it (DDGS _busy_refuse).
+            self._notify_info("Stop the current generation before clearing the history.")
+            return
+
         # File IO + full re-list/parse (O(n x size)) runs on a worker, never
         # the UI thread (forensics R4); state lands via the Flet context.
         def work() -> None:
@@ -1375,17 +1496,32 @@ class AppController:
 
     def _conversation_loaded(self, ok: bool, agent: Any, conversation_id: str) -> None:
         if not ok:
-            self._notify_error("Could not load conversation. See logs.")
+            self._notify_error("Could not load conversation. See the Activity log.")
             return
         state.active_conversation = conversation_id
         state.messages = history.messages_from_history(agent)
         self._set_tab(0)
 
     def _delete_conversation(self, conversation_id: str) -> None:
+        was_active = conversation_id == state.active_conversation
+        if was_active and state.busy:
+            # The running turn writes into this id when it finishes; deleting
+            # the ACTIVE chat mid-stream is the race DDGS guards exactly.
+            # Deleting a DIFFERENT chat while streaming is safe.
+            self._notify_info("Stop the current generation before deleting this conversation.")
+            return
+
         def work() -> None:
             ok = history.delete_conversation(conversation_id)
             items = history.list_conversations()
-            self._in_flet_ctx(self._apply_history_change)(items, 0 if ok else 1)
+            # Deleting the conversation we are IN rotates to a fresh one —
+            # otherwise active_conversation keeps pointing at a deleted file
+            # and the next send recreates it (DDGS keep_current=False).
+            self._in_flet_ctx(self._apply_history_change)(
+                items,
+                0 if ok else 1,
+                start_new=was_active,
+            )
 
         self.page.run_thread(work)
 
@@ -1398,7 +1534,7 @@ class AppController:
         state.conversations = items
         if failures:
             self._notify_error(
-                f"Could not delete {failures} conversation file(s). See logs.",
+                f"Could not delete {failures} conversation file(s). See the Activity log.",
             )
         if start_new:
             self._new_conversation()
@@ -1428,11 +1564,25 @@ class AppController:
         self._copy_text(log_tail())
 
     def _export_conversation(self, conversation_id: str) -> None:
-        content, filename = history.export_conversation_markdown(conversation_id)
-        if not content:
-            self._notify_error("Export failed. Conversation unreadable.")
-            return
+        # File read + full JSON parse runs on a worker, never on the UI
+        # thread (same rule as delete/open); the save dialog then follows
+        # from the Flet context once the content is ready.
+        def work() -> None:
+            content, filename = history.export_conversation_markdown(conversation_id)
+            if not content:
+                self._in_flet_ctx(self._notify_error)(
+                    "Export failed. Conversation unreadable.",
+                )
+                return
+            self._in_flet_ctx(self._start_export_write)(
+                content,
+                filename,
+                conversation_id,
+            )
 
+        self.page.run_thread(work)
+
+    def _start_export_write(self, content: str, filename: str, conversation_id: str) -> None:
         async def _write() -> None:
             path = await save_text_file(
                 self.page,
@@ -1442,11 +1592,9 @@ class AppController:
             )
             if path:
                 LOG.info("exported conversation %s to %s", conversation_id, path)
-                self._in_flet_ctx(self._notify_info)(f"Saved to {path}")
+                self._notify_info(f"Saved to {path}")
             else:
-                self._in_flet_ctx(self._notify_error)(
-                    "Could not save the file. Check that the folder is writable.",
-                )
+                self._notify_error("Could not save the file. Check that the folder is writable.")
 
         self.page.run_task(_write)
 
@@ -1486,7 +1634,12 @@ class AppController:
         if not state.update_info:
             LOG.info("no update to show")
             return
-        dialog = build_update_dialog(self.page, state.update_info, self._url_launcher)
+        dialog = build_update_dialog(
+            self.page,
+            state.update_info,
+            self._url_launcher,
+            on_close=self._dismiss_update,
+        )
         self.page.show_dialog(dialog)
 
     def _dismiss_update(self) -> None:
@@ -1540,14 +1693,189 @@ class AppController:
             LOG.warning("open url failed: %s", exc)
             self._notify_error(f"Cannot open link: {str(exc)[:150]}")
 
+    # --- lifecycle / system-back -------------------------------------------
+
+    def _android_activity(self) -> object | None:
+        """The running Android activity (KTV's proven fallback chain)."""
+        import os
+
+        try:
+            from jnius import autoclass
+        except Exception:
+            return None
+        for cls_name in (
+            os.getenv("MAIN_ACTIVITY_HOST_CLASS_NAME"),
+            "ng.kiri.lmrouter.MainActivity",
+            "net.flet.MainActivity",
+            "com.flet.flet_android.MainActivity",
+            "org.kivy.android.PythonActivity",
+        ):
+            if not cls_name:
+                continue
+            with contextlib.suppress(Exception):
+                host = autoclass(cls_name)
+                activity = getattr(host, "mActivity", None) or getattr(
+                    host, "mCurrentActivity", None
+                )
+                if activity is not None:
+                    return activity
+        return None
+
+    def _ensure_back_underlay(self) -> None:
+        """Put a view beneath the shell so Android back reaches Python.
+
+        flet's Dart system-back handler bails when the top view is the only
+        one (`page.dart` `_handleSystemPopRoute`: `views.length <= 1` →
+        returns null) — the framework finishes the activity WITHOUT emitting
+        `view_pop`, so no handler could save state, stop the gateway, or
+        navigate. Same underlay KTV installs for the identical reason.
+        """
+        try:
+            views = self.page.views
+            if not views:
+                return
+            if any(getattr(v, "route", None) == "/blank" for v in views):
+                return
+            views.insert(
+                0,
+                ft.View(route="/blank", bgcolor=ft.Colors.BLACK, padding=0),
+            )
+            self.page.update()
+            LOG.info("back underlay installed beneath the shell")
+        except Exception as exc:
+            LOG.debug("back underlay install failed: %s", exc)
+
+    def _restore_shell(self, popped: ft.View | None) -> None:
+        """Re-show the shell the framework already hid.
+
+        On system back, `page.dart` marks the popped route in
+        `_pendingPoppedViewRoutes` and filters it out of the Navigator BEFORE
+        Python ever sees the event; the pending mark clears only when the
+        route leaves the Python tree. A route re-key is the single-patch
+        restore: old route vanishes → pending clears → the same View shows
+        again. Cost: the Navigator re-keys the page, so per-component hook
+        state (composer draft) remounts — global AppState survives.
+        """
+        views = self.page.views
+        target = (
+            popped
+            if popped is not None and any(v is popped for v in views)
+            else (views[-1] if views else None)
+        )
+        if target is None or getattr(target, "route", None) == "/blank":
+            return
+        self._back_seq += 1
+        target.route = f"/back-{self._back_seq}"
+        try:
+            self.page.update()
+        except Exception as exc:
+            LOG.info("shell restore failed: %s", exc)
+
+    def _background_app(self) -> None:
+        """Hide without dying, keeping the gateway serving — the desktop
+        window.on_event path does the same thing via window.visible."""
+        try:
+            is_desktop = bool(self.page.platform.is_desktop())
+        except Exception as exc:
+            LOG.debug("platform probe failed: %s", exc)
+            is_desktop = False
+        if is_desktop:
+            try:
+                self.page.window.visible = False
+                return
+            except Exception as exc:
+                LOG.info("window hide failed: %s", exc)
+        try:
+            activity = self._android_activity()
+            if activity is not None:
+                activity.moveTaskToBack(True)
+                return
+            LOG.info("no android activity to background; shell restored only")
+        except Exception as exc:
+            LOG.info("android background failed: %s", exc)
+
+    def _on_view_pop(self, e: ft.ViewPopEvent) -> None:
+        """Owner rule (Sherlock): system back must never tear down the shell
+        — it maps to in-app navigation. At the Chat root the owner chose
+        desktop parity: keep-running ON → background, OFF → full teardown."""
+        try:
+            popped = getattr(e, "view", None)
+            if state.selected_tab != 0:
+                state.selected_tab = 0
+                self._restore_shell(popped)
+                return
+            if self.settings.keep_running_when_closed:
+                self._restore_shell(popped)
+                self._background_app()
+            else:
+                self._quit_app()
+        except Exception as exc:
+            LOG.warning("view_pop handling failed: %s", exc)
+
+    async def _on_lifecycle(self, e: ft.AppLifecycleStateChangeEvent) -> None:
+        """DDGS shape: flush when backgrounded, re-probe when foregrounded.
+
+        Flet 1.0 exits without running atexit/buffered writes, and the OS can
+        drop the connection while we're backgrounded (Sherlock). Compare the
+        enum member — `e.data` is always None on a dataclass payload, which
+        is why KTV's string comparison never fires.
+        """
+        try:
+            if e.state in (
+                ft.AppLifecycleState.HIDE,
+                ft.AppLifecycleState.PAUSE,
+                ft.AppLifecycleState.DETACH,
+            ):
+                try:
+                    self.settings.save()
+                except Exception as exc:
+                    LOG.warning("lifecycle settings flush failed: %s", exc)
+                return
+            if e.state in (ft.AppLifecycleState.RESUME, ft.AppLifecycleState.SHOW):
+                await recheck_connectivity(self.page)
+        except Exception as exc:
+            LOG.info("lifecycle handling failed: %s", exc)
+
+    def _on_disconnect(self, e: object = None) -> None:
+        # Flet 1.0 exits without running atexit/buffered writes — flush
+        # synchronously: the loop is already closing, so page.run_task would
+        # leave the coroutine un-awaited (DDGS's rationale, verbatim).
+        try:
+            self.settings.save()
+        except Exception as exc:
+            LOG.debug("disconnect flush failed: %s", exc)
+
+    # --- teardown ----------------------------------------------------------
+
     def _quit_app(self) -> None:
-        # Gateway shutdown joins up to ~7s — keep it off the UI thread
-        # (forensics R8); window teardown runs in the Flet context.
+        # Idempotent: on_close, the Quit button and the back-at-root path can
+        # race. Gateway shutdown joins up to ~7s — keep it off the UI thread
+        # (forensics R8); window teardown runs in the Flet context. Ordered so
+        # every resource dies before the loop that owns it.
+        if self._quitting:
+            return
+        self._quitting = True
+
         def work() -> None:
             try:
                 self.services.mcp.request_stop()
             except Exception as exc:
                 LOG.debug("mcp stop signal: %s", exc)
+            # Bounded join: the owner task's finally closes every MCP context
+            # (and reaps stdio children) — give it a window before the portal
+            # that owns those contexts dies.
+            future = self._mcp_future
+            if future is not None:
+                try:
+                    future.result(timeout=5)
+                except Exception as exc:
+                    LOG.debug("mcp owner join: %s", exc)
+            # httpx client is portal-loop-bound; close it ON that loop before
+            # stopping the portal (aclose on a dead portal would raise).
+            try:
+                self.services.agent.call(self.services.http.aclose)
+            except Exception as exc:
+                LOG.debug("http client close: %s", exc)
             try:
                 self.services.agent.stop()
             except Exception as exc:
@@ -1556,16 +1884,52 @@ class AppController:
                 self.services.engine.stop()
             except Exception as exc:
                 LOG.warning("gateway shutdown: %s", exc)
-            self._in_flet_ctx(self._destroy_window)()
+            try:
+                # Share proxy + tunnel outlived quit: daemon threads die with
+                # the process, but the session must be marked stopped first.
+                self._stop_share()
+            except Exception as exc:
+                LOG.debug("share shutdown: %s", exc)
+            self._in_flet_ctx(self._finish_quit)()
 
         self.page.run_thread(work)
 
-    def _destroy_window(self) -> None:
-        # Window.destroy is a coroutine in Flet 1.0: calling it bare returns an
-        # un-awaited coroutine and the window never closes. Re-enable the close
-        # guard synchronously, then hand the destroy to the Flet event loop.
-        self.page.window.prevent_close = False
+    def _finish_quit(self) -> None:
+        """Flet-context step: release the ads, THEN destroy the window — one
+        run_task chain so window teardown can never race the ad release."""
+
+        async def _close_then_destroy() -> None:
+            ads = self.ads
+            if ads is not None:
+                try:
+                    await ads.close()
+                except Exception as exc:
+                    LOG.debug("ad close: %s", exc)
+            self._destroy_window()
+
         try:
+            self.page.run_task(_close_then_destroy)
+        except Exception as exc:
+            LOG.warning("quit failed: %s", exc)
+
+    def _destroy_window(self) -> None:
+        # Re-enable the close guard first so destroy is never intercepted.
+        self.page.window.prevent_close = False
+        # Android: window.close/destroy are Dart-guarded to desktop (KTV's
+        # documented finding), so finishing the activity directly is the only
+        # real exit there.
+        try:
+            if self.page.platform.is_mobile():
+                activity = self._android_activity()
+                if activity is not None:
+                    activity.finish()
+                    return
+                LOG.warning("android exit: no activity handle; trying window.destroy")
+        except Exception as exc:
+            LOG.warning("android finish failed: %s", exc)
+        try:
+            # Window.destroy is a coroutine in Flet 1.0: calling it bare
+            # returns an un-awaited coroutine and the window never closes.
             self.page.run_task(self.page.window.destroy)
         except Exception as exc:
             LOG.warning("quit failed: %s", exc)
@@ -1579,6 +1943,8 @@ def main(page: ft.Page) -> None:
     page.render(
         lambda: ServiceCtx(services, lambda: ControllerMethodsCtx(methods, lambda: AppShell())),
     )
+    # Must come AFTER render: it needs views[0] to exist to insert beneath.
+    controller._ensure_back_underlay()
 
 
 if __name__ == "__main__":
