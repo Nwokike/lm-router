@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import contextvars
 import os
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -23,7 +24,7 @@ from core.logging import tail as log_tail
 from core.notify import show_snack
 from core.settings import AppSettings, MCPServerConfig, ProviderConfig, pop_load_warnings
 from core.state import state
-from services import history
+from services import history, model_bench
 from services.ad_service import AdService
 from services.agent import AgentService
 from services.clock import build_time_tool, with_clock
@@ -67,6 +68,7 @@ class AppController:
         self._tunnel: LocalTunnel | None = None
         self._share_url = ""
         self._quitting = False  # run-once guard: on_close + Quit can race
+        self._retest_stop: threading.Event | None = None
         self._back_seq = 0  # route re-key counter for view_pop restores
         # flet page context captured at init: chat callbacks run on the anyio
         # portal thread, which has no context of its own (kani thread study).
@@ -221,6 +223,9 @@ class AppController:
         m.start_share = self._start_share
         m.stop_share = self._stop_share
         m.regenerate_share_key = self._regenerate_share_key
+        m.test_model = self._test_model
+        m.retest_models = self._retest_models
+        m.stop_retest = self._stop_retest
         m.quit_app = self._quit_app
         m.send_message = self._send_message
         m.regenerate_last = self._regenerate_last
@@ -1017,6 +1022,106 @@ class AppController:
         LOG.info("share key regenerated")
         self._refresh_share_key()
         self._notify_info("New key generated. Copy it to the other client.")
+
+    # ── model test bench (console parity: Test button, verdict chips,
+    # serial sweeps with live progress; see services/model_bench.py) ────
+
+    def _apply_test_result(self, result: dict) -> None:
+        model_id = str(result.get("id") or "")
+        state.model_testing = state.model_testing - {model_id}
+        if model_id:
+            state.model_test_results = {**state.model_test_results, model_id: result}
+
+    def _test_model(self, model_id: str) -> None:
+        """One model, one probe: the verdict chip doubles as re-test."""
+        if not state.gateway_running:
+            self._notify_error("Gateway is not running. Start it on the Server tab.")
+            return
+        if state.retesting:
+            self._notify_info("A retest sweep is already running.")
+            return
+        if model_id in state.model_testing:
+            return
+        state.model_testing = state.model_testing | {model_id}
+        base = state.gateway_base_url
+        endpoint = "chat.completion"
+        for row in state.models:
+            if isinstance(row, dict) and str(row.get("id") or "") == model_id:
+                endpoint = str(row.get("endpoint_type") or "chat.completion")
+                break
+        http = self.services.http
+        agent = self.services.agent
+
+        def work() -> None:
+            try:
+                result = agent.call(model_bench.test_model, http, base, model_id, endpoint)
+            except Exception as exc:
+                LOG.warning("model test failed: %s", exc)
+                result = {
+                    "id": model_id,
+                    "verdict": "FAIL",
+                    "ms": 0,
+                    "snippet": str(exc)[:120],
+                }
+            self._in_flet_ctx(self._apply_test_result)(result)
+
+        self.page.run_thread(work)
+
+    def _retest_models(self, only_not_ready: bool) -> None:
+        """Serial sweep. `only_not_ready` = every row whose status is not
+        "active" — the owner's "retry the untested / rate-limited" ask."""
+        if not state.gateway_running:
+            self._notify_error("Gateway is not running. Start it on the Server tab.")
+            return
+        if state.retesting:
+            self._notify_info("A retest sweep is already running.")
+            return
+        rows = [
+            row
+            for row in state.models
+            if isinstance(row, dict)
+            and str(row.get("id") or "")
+            and (not only_not_ready or str(row.get("status", "active")).lower() != "active")
+        ]
+        if not rows:
+            self._notify_info("Nothing to retest: every model is active.")
+            return
+        state.retesting = True
+        state.retest_progress = (0, len(rows))
+        stop = threading.Event()
+        self._retest_stop = stop
+        base = state.gateway_base_url
+        http = self.services.http
+        agent = self.services.agent
+
+        def on_row(result: dict, done: int, total: int) -> None:
+            self._in_flet_ctx(self._retest_row)(result, done, total)
+
+        def work() -> None:
+            try:
+                agent.call(model_bench.retest, http, base, rows, on_row, stop)
+            except Exception as exc:
+                LOG.warning("retest sweep failed: %s", exc)
+                self._in_flet_ctx(self._notify_error)(f"Retest stopped: {str(exc)[:120]}")
+            finally:
+                self._in_flet_ctx(self._finish_retest)()
+
+        self.page.run_thread(work)
+
+    def _retest_row(self, result: dict, done: int, total: int) -> None:
+        self._apply_test_result(result)
+        state.retest_progress = (done, total)
+
+    def _finish_retest(self) -> None:
+        state.retesting = False
+        state.retest_progress = (0, 0)
+        state.model_testing = frozenset()
+        self._retest_stop = None
+
+    def _stop_retest(self) -> None:
+        if self._retest_stop is not None:
+            self._retest_stop.set()
+        self._notify_info("Stopping the retest sweep after the current model…")
 
     def _refresh_share_key(self) -> None:
         """Apply share-key settings to the LIVE proxy (owner decision: if the

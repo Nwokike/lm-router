@@ -46,6 +46,10 @@ class ControllerMethods:
     start_share: Callable[[], None] = _noop
     stop_share: Callable[[], None] = _noop
     regenerate_share_key: Callable[[], None] = _noop
+    # model test bench
+    test_model: Callable[[str], None] = _noop
+    retest_models: Callable[[bool], None] = _noop
+    stop_retest: Callable[[], None] = _noop
     # settings
     save_settings: Callable[[dict], None] = _noop
     add_provider: Callable[[dict], None] = _noop

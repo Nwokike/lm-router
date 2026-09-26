@@ -555,3 +555,129 @@ def test_server_log_filter_uses_chat_scale_pills(_renderer_page) -> None:
         root._detach_observable_subscriptions()
         root._state.mounted = False
         state.gateway_running, state.onboarding_done = saved
+
+
+def test_catalog_rows_carry_the_bench_pill(_renderer_page) -> None:
+    """Console parity: every catalog row shows a Test pill — idle, in-flight
+    (spinner), or a colored verdict that taps through to a re-test."""
+    from core.state import state
+    from screens.server_screen import ServerScreen
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    saved = (
+        state.gateway_running,
+        state.models,
+        state.model_testing,
+        state.model_test_results,
+        state.retesting,
+        state.retest_progress,
+    )
+    state.gateway_running = True
+    state.models = [
+        {"id": "m-idle", "status": "untested"},
+        {"id": "m-busy", "status": "active"},
+        {"id": "m-done", "status": "active"},
+        {"id": "m-rate", "status": "untested"},
+    ]
+    state.model_testing = frozenset({"m-busy"})
+    state.model_test_results = {
+        "m-done": {"id": "m-done", "verdict": "OK", "ms": 842, "snippet": "OK"},
+        "m-rate": {"id": "m-rate", "verdict": "RATE", "ms": 4000, "snippet": ""},
+    }
+    state.retesting = False
+    state.retest_progress = (0, 0)
+    try:
+        root = _render(lambda: ControllerMethodsCtx(ControllerMethods(), ServerScreen))
+        texts = {
+            getattr(node, "value", None)
+            for node in _walk_all(root)
+            if isinstance(node, ft.Text) and getattr(node, "value", None)
+        }
+        assert "Test" in texts, "idle rows must offer a Test pill"
+        assert "testing" in texts, "in-flight rows must show the spinner label"
+        assert "✓ 842ms" in texts, texts
+        assert "✗ rate limited" in texts, "429 verdict uses the owner's plain wording"
+        buttons = {
+            getattr(node, "content", None)
+            for node in _walk_all(root)
+            if isinstance(node, ft.TextButton)
+        }
+        assert "Retest not-ready (2)" in buttons, f"header count wrong: {buttons}"
+        assert "Test all" in buttons
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        (
+            state.gateway_running,
+            state.models,
+            state.model_testing,
+            state.model_test_results,
+            state.retesting,
+            state.retest_progress,
+        ) = saved
+
+
+def test_catalog_header_drives_the_bench(_renderer_page) -> None:
+    """The header buttons must reach the controller: retest-not-ready passes
+    True, Test all passes False, and Stop appears only while a sweep runs."""
+    from core.state import state
+    from screens.server_screen import ServerScreen
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    saved = (
+        state.gateway_running,
+        state.models,
+        state.retesting,
+        state.retest_progress,
+    )
+    state.gateway_running = True
+    state.models = [{"id": "a", "status": "active"}, {"id": "b", "status": "slow"}]
+    state.retesting = False
+    state.retest_progress = (0, 0)
+
+    calls: list = []
+    methods = ControllerMethods()
+    methods.retest_models = lambda only: calls.append(("retest", only))
+    methods.stop_retest = lambda: calls.append(("stop",))
+    try:
+        root = _render(lambda: ControllerMethodsCtx(methods, ServerScreen))
+
+        def _click(label: str) -> None:
+            for node in _walk_all(root):
+                if isinstance(node, ft.TextButton) and getattr(node, "content", None) == label:
+                    node.on_click(None)
+                    return
+            raise AssertionError(f"button {label!r} not found")
+
+        _click("Retest not-ready (1)")
+        _click("Test all")
+        assert calls == [("retest", True), ("retest", False)], calls
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.gateway_running, state.models, state.retesting, state.retest_progress = saved
+
+    # While a sweep runs: progress label + Stop, no retest buttons.
+    state.gateway_running = True
+    state.models = [{"id": "a", "status": "active"}]
+    state.retesting = True
+    state.retest_progress = (3, 7)
+    try:
+        root = _render(lambda: ControllerMethodsCtx(methods, ServerScreen))
+        texts = {
+            getattr(node, "value", None)
+            for node in _walk_all(root)
+            if isinstance(node, ft.Text) and getattr(node, "value", None)
+        }
+        assert "Testing 3/7…" in texts, texts
+        for node in _walk_all(root):
+            if isinstance(node, ft.TextButton) and getattr(node, "content", None) == "Stop":
+                node.on_click(None)
+                break
+        else:
+            raise AssertionError("Stop button missing during a sweep")
+        assert ("stop",) in calls
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.gateway_running, state.models, state.retesting, state.retest_progress = saved

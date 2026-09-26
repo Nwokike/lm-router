@@ -733,3 +733,91 @@ def test_share_key_settings_rebind_the_live_proxy(boot_page) -> None:
     assert session.keys[-1].startswith("sk-lm-") and session.keys[-1] != before
 
     controller._share = None
+
+
+def test_bench_guards_and_live_sweep(boot_page) -> None:
+    """Guards first (gateway off, nothing-to-retest, double sweep), then a
+    REAL sweep through the portal with an injected transport: only not-ready
+    rows are probed and the verdict lands in state."""
+    import json as _json
+
+    import httpx as _hx
+
+    from main import AppController
+
+    controller = AppController(boot_page)
+    controller.init()
+    boot_page.drain()
+
+    saved = (
+        state.gateway_running,
+        state.models,
+        state.model_testing,
+        state.model_test_results,
+        state.retesting,
+        state.retest_progress,
+    )
+    try:
+        # Guard 1: gateway off.
+        state.gateway_running = False
+        threads = len(boot_page.threads)
+        controller.methods.test_model("x")
+        assert len(boot_page.threads) == threads, "no probe while the gateway is down"
+        assert any(
+            "Gateway is not running" in str(getattr(getattr(d, "content", None), "value", ""))
+            for d in boot_page.dialogs
+        ), "the refusal must be visible"
+
+        # Guard 2: nothing matches the filter.
+        state.gateway_running = True
+        state.models = [{"id": "a", "status": "active"}]
+        controller.methods.retest_models(True)
+        assert len(boot_page.threads) == threads, "no sweep when nothing is not-ready"
+        assert any(
+            "Nothing to retest" in str(getattr(getattr(d, "content", None), "value", ""))
+            for d in boot_page.dialogs
+        )
+
+        # Guard 3: double sweep.
+        state.retesting = True
+        controller.methods.retest_models(False)
+        assert len(boot_page.threads) == threads, "no second sweep while one runs"
+        state.retesting = False
+
+        # Live sweep through the portal: only the not-ready row is probed.
+        probed: list[str] = []
+
+        def handler(request):
+            body = _json.loads(request.content or b"{}")
+            probed.append(body["model"])
+            return _hx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+
+        controller.services.http._client = _hx.AsyncClient(transport=_hx.MockTransport(handler))
+        state.models = [
+            {"id": "cap", "status": "untested"},
+            {"id": "fine", "status": "active"},
+        ]
+        state.model_test_results = {}
+        controller.methods.retest_models(True)
+        boot_page.drain()
+
+        assert probed == ["cap"], f"only not-ready rows are swept, probed={probed}"
+        assert state.model_test_results["cap"]["verdict"] == "OK"
+        assert state.retesting is False, "sweep must clear the flag"
+
+        # Single-model probe (the per-row Test / retry).
+        probed.clear()
+        controller.methods.test_model("fine")
+        boot_page.drain()
+        assert probed == ["fine"]
+        assert state.model_test_results["fine"]["verdict"] == "OK"
+        assert state.model_testing == frozenset()
+    finally:
+        (
+            state.gateway_running,
+            state.models,
+            state.model_testing,
+            state.model_test_results,
+            state.retesting,
+            state.retest_progress,
+        ) = saved

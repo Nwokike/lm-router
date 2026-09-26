@@ -118,6 +118,60 @@ def ServerScreen():
         if value != prefs.share_key:
             methods.save_settings({"share_key": value})
 
+    def _test_pill(model_id: str) -> ft.Control:
+        """Verdict chip + the Test/re-test affordance in one (console parity).
+
+        Idle = "Test"; in-flight = spinner; done = colored verdict. Tapping a
+        verdict runs the probe again, which is the per-model retry the owner
+        asked for. Labels stay plain ("rate limited", never a source word).
+        """
+        if model_id in state.model_testing:
+            return ft.Row(
+                spacing=tokens.SPACE_XXS,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.ProgressRing(
+                        width=tokens.ICON_XS,
+                        height=tokens.ICON_XS,
+                        stroke_width=2,
+                    ),
+                    ft.Text("testing", size=tokens.FONT_2XS, color=theme.dim(is_dark)),
+                ],
+            )
+        result = state.model_test_results.get(model_id)
+        if result:
+            verdict = str(result.get("verdict") or "")
+            ms = result.get("ms")
+            if verdict == "OK":
+                label, color = f"\u2713 {ms}ms", ft.Colors.GREEN
+            elif verdict == "RATE":
+                label, color = "\u2717 rate limited", ft.Colors.AMBER
+            elif verdict == "EMPTY":
+                label, color = "\u2717 no reply", ft.Colors.AMBER
+            else:
+                label = f"\u2717 failed ({ms}ms)" if ms else "\u2717 failed"
+                color = ft.Colors.ERROR
+            tooltip = f"Test again (last: {verdict})"
+        else:
+            label, color = "Test", theme.dim(is_dark)
+            tooltip = "Probe this model through the gateway"
+        return ft.Container(
+            padding=ft.Padding.symmetric(
+                horizontal=tokens.SPACE_TIGHT,
+                vertical=tokens.SPACE_XXS,
+            ),
+            border_radius=tokens.RADIUS_PILL,
+            bgcolor=ft.Colors.with_opacity(tokens.OPACITY_FAINT, color),
+            tooltip=tooltip,
+            on_click=lambda _, mid=model_id: methods.test_model(mid),
+            content=ft.Text(
+                label,
+                size=tokens.FONT_2XS,
+                weight=ft.FontWeight.W_600,
+                color=color,
+            ),
+        )
+
     page = getattr(ft.context, "page", None)
     is_dark = theme.is_dark_mode(page, state.theme_mode)
 
@@ -481,6 +535,16 @@ def ServerScreen():
     # Discovered Model Catalog Card: full catalog in its own bounded list (the
     # old [:15] slice hid models, upstream now lists 40+).
     models_count = len(state.models)
+
+    def _not_ready_count() -> int:
+        # "not ready" = the router's own non-active statuses (untested shows
+        # as rate limited in the UI); this is the retest-not-ready button's N.
+        return sum(
+            1
+            for row in state.models
+            if isinstance(row, dict) and str(row.get("status", "active")).lower() != "active"
+        )
+
     model_items: list[ft.Control] = []
     for m in state.models:
         m_id = m.get("id", "")
@@ -572,6 +636,7 @@ def ServerScreen():
                         # ellipsis; it only must not wrap into a tall blob.
                         no_wrap=True,
                     ),
+                    _test_pill(m_id),
                 ],
             ),
             ft.Row(
@@ -639,10 +704,46 @@ def ServerScreen():
                             size=tokens.FONT_MD,
                             weight=ft.FontWeight.W_600,
                         ),
-                        ft.Text(
-                            "free inference" if running else "gateway offline",
-                            size=tokens.FONT_XS,
-                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ft.Row(
+                            spacing=tokens.SPACE_TIGHT,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            controls=[
+                                *(
+                                    [
+                                        ft.Text(
+                                            f"Testing {state.retest_progress[0]}/"
+                                            f"{state.retest_progress[1]}\u2026",
+                                            size=tokens.FONT_XS,
+                                            color=theme.PRIMARY,
+                                        ),
+                                        ft.TextButton(
+                                            "Stop",
+                                            style=_compact_button_style(),
+                                            on_click=lambda _: methods.stop_retest(),
+                                        ),
+                                    ]
+                                    if state.retesting
+                                    else [
+                                        ft.TextButton(
+                                            f"Retest not-ready ({_not_ready_count()})",
+                                            style=_compact_button_style(),
+                                            disabled=_not_ready_count() == 0,
+                                            on_click=lambda _: methods.retest_models(True),
+                                        ),
+                                        ft.TextButton(
+                                            "Test all",
+                                            style=_compact_button_style(),
+                                            disabled=models_count == 0,
+                                            on_click=lambda _: methods.retest_models(False),
+                                        ),
+                                    ]
+                                ),
+                                ft.Text(
+                                    "free inference" if running else "gateway offline",
+                                    size=tokens.FONT_XS,
+                                    color=ft.Colors.ON_SURFACE_VARIANT,
+                                ),
+                            ],
                         ),
                     ],
                 ),

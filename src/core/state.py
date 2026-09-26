@@ -50,6 +50,10 @@ class AppState:
 
     # Settings: server-ids with an in-flight "Test" (spinner + re-click guard)
     mcp_testing: frozenset = frozenset()
+    # Model test bench (console parity): sweep state + per-row verdicts.
+    model_testing: frozenset = frozenset()
+    retesting: bool = False
+    retest_progress: tuple = (0, 0)
 
     def __init__(self) -> None:
         self.gateway_base_url = f"http://127.0.0.1:{8082}/v1"
@@ -59,6 +63,7 @@ class AppState:
         self.active_conversation: str = ""
         self.mcp_tools: list[str] = []
         self.mcp_test_results: dict = {}
+        self.model_test_results: dict = {}
         # Per-model rate-limit hints from GET /account-limits, keyed by model
         # id. Drives the "this model is capped" affordances in the UI.
         self.rate_hints: dict = {}
