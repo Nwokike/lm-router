@@ -15,6 +15,7 @@ def build_update_dialog(
     update_data: dict | None = None,
     url_launcher: object | None = None,
     on_close: Callable[[], None] | None = None,
+    theme_mode: str = "system",
 ) -> ft.AlertDialog:
     is_update = update_data is not None
     title = (update_data or {}).get("title") or f"{constants.APP_NAME} {constants.APP_VERSION}"
@@ -66,7 +67,7 @@ def build_update_dialog(
                 controls=[
                     theme.markdown(
                         notes,
-                        is_dark=theme.is_dark_mode(page, "system"),
+                        is_dark=theme.is_dark_mode(page, theme_mode),
                         on_tap_link=lambda e: _launch(e.data),
                     ),
                 ],

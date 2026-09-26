@@ -697,7 +697,9 @@ def ServerScreen():
                     content=ft.Text(
                         "Any client on this URL sees the full model catalog via "
                         "/v1/models, not only the model selected here. The URL "
-                        "changes on every start and stops when you stop sharing.",
+                        "changes on every start and stops when you stop sharing. "
+                        "API and LLM clients connect directly; a browser tab may "
+                        "show a one-time tunnel notice.",
                         size=tokens.FONT_2XS,
                         color=theme.PRIMARY,
                     ),

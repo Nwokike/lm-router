@@ -838,3 +838,89 @@ def test_boot_log_never_carries_gateway_tokens(boot_page) -> None:
     blob = " ".join(record.get("msg", "") for record in applog.records()).lower()
     for token in FORBIDDEN:
         assert token not in blob, f"gateway token {token!r} surfaced in the log ring"
+
+
+def test_delete_message_cuts_view_and_history_together(boot_page) -> None:
+    """A one-sided cut is the bug class: view trimmed but kani intact
+    resurrects on save; kani trimmed but view intact 400s the next send."""
+    from types import SimpleNamespace
+
+    from main import AppController
+
+    controller = AppController(boot_page)
+    controller.init()
+    boot_page.drain()
+
+    agent = controller.services.agent
+    empty_row = SimpleNamespace(text="")
+    rows = [
+        SimpleNamespace(text="q1"),
+        SimpleNamespace(text="a1"),
+        empty_row,
+        SimpleNamespace(text="q2"),
+    ]
+    agent._kani = SimpleNamespace(chat_history=rows)
+    saved = (state.messages, state.busy, state.active_conversation, state.gateway_running)
+    state.gateway_running = True
+    try:
+        state.messages = [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "q2"},
+        ]
+
+        # Busy: refused, nothing moves.
+        state.busy = True
+        threads = len(boot_page.threads)
+        controller.methods.delete_message_at(1)
+        assert len(state.messages) == 3
+        assert len(rows) == 4
+        assert len(boot_page.threads) == threads
+        assert any(
+            "Stop the current generation" in str(getattr(getattr(d, "content", None), "value", ""))
+            for d in boot_page.dialogs
+        ), "the refusal must be visible"
+
+        # Idle: view and history cut together; empty rows after the boundary
+        # (never displayed) go too.
+        state.busy = False
+        tasks = len(boot_page.tasks)
+        controller.methods.delete_message_at(2)
+        assert [m["content"] for m in state.messages] == ["q1", "a1"]
+        assert [r.text for r in rows] == ["q1", "a1"], "empty row after boundary must die"
+        assert len(boot_page.tasks) > tasks, "the cut conversation must be re-saved"
+
+        # Deleting everything rotates to a fresh conversation and clears kani.
+        previous_id = state.active_conversation
+        controller.methods.delete_message_at(0)
+        assert state.messages == []
+        assert rows == [], "a full cut clears the kani history"
+        assert state.active_conversation != previous_id, "empty chat rotates the id"
+    finally:
+        agent._kani = None
+        (
+            state.messages,
+            state.busy,
+            state.active_conversation,
+            state.gateway_running,
+        ) = saved
+
+
+def test_update_dialog_double_open_shows_one_dialog(boot_page) -> None:
+    """The sticky chip stays tappable while the dialog is open; a second tap
+    used to raise RuntimeError from show_dialog. Sherlock pops the stale one."""
+    from main import AppController
+
+    controller = AppController(boot_page)
+    controller.init()
+    boot_page.drain()
+
+    saved = state.update_info
+    state.update_info = {"title": "X 2.0", "release_notes": "notes"}
+    try:
+        controller.methods.open_update_dialog()
+        assert len(boot_page.dialogs) == 1
+        controller.methods.open_update_dialog()
+        assert len(boot_page.dialogs) == 1, "stale dialog must be popped, not stacked"
+    finally:
+        state.update_info = saved

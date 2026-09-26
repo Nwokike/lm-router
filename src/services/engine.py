@@ -14,6 +14,7 @@ import json
 import os
 import re
 import threading
+import time
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
@@ -40,8 +41,19 @@ def _download(url: str) -> bytes:
     # never fetch its own gateway without this header.
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})  # noqa: S310
     # url is the app-controlled https constant from constants.ENGINE_URL.
-    with urllib.request.urlopen(request, timeout=30) as resp:  # noqa: S310
-        return resp.read()
+    # One bounded retry: a transient blip used to fall all the way through
+    # to the cache fallback (or EngineUnavailable on a cold install).
+    last: Exception | None = None
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as resp:  # noqa: S310
+                return resp.read()
+        except Exception as exc:
+            last = exc
+            if attempt == 0:
+                LOG.warning("engine download failed (%s); retrying once", exc)
+                time.sleep(1.0)
+    raise last  # type: ignore[misc]
 
 
 def _validate(data: bytes) -> str:
@@ -158,7 +170,13 @@ class EngineService:
     @staticmethod
     def _health(port: int) -> dict | None:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as resp:
+            # House rule: explicit User-Agent on every HTTP call — this probe
+            # was one of the two still sending Python-urllib/3.x.
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/health",
+                headers={"User-Agent": USER_AGENT},
+            )
+            with urllib.request.urlopen(request, timeout=2) as resp:  # noqa: S310
                 data = json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
             LOG.debug("health probe failed: %s", exc)
@@ -170,8 +188,11 @@ class EngineService:
     @staticmethod
     def _fetch_account_limits(port: int) -> dict | None:
         try:
-            url = f"http://127.0.0.1:{port}/account-limits"
-            with urllib.request.urlopen(url, timeout=2) as resp:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/account-limits",
+                headers={"User-Agent": USER_AGENT},
+            )
+            with urllib.request.urlopen(request, timeout=2) as resp:  # noqa: S310
                 return json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
             LOG.debug("account-limits probe failed: %s", exc)

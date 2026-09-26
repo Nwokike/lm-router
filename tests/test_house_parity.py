@@ -454,6 +454,9 @@ def test_copy_matches_the_house_style() -> None:
     assert "free-model rate limits" in server, (
         "the open-sharing notice must say recipients spend YOUR rate limits"
     )
+    assert "one-time tunnel notice" in server, (
+        "the share card must say browsers may see the tunnel notice while API clients skip it"
+    )
 
     dialog = _read("components/update_dialog.py")
     assert '"Download update"' in dialog, "buttons are sentence case in this house"

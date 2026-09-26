@@ -247,6 +247,7 @@ class AppController:
         m.clear_history = self._clear_history
         m.open_conversation = self._open_conversation
         m.delete_conversation = self._delete_conversation
+        m.delete_message_at = self._delete_message_at
         m.copy_text = self._copy_text
         m.copy_logs = self._copy_logs
         m.export_conversation = self._export_conversation
@@ -1635,6 +1636,54 @@ class AppController:
         state.messages = history.messages_from_history(agent)
         self._set_tab(0)
 
+    def _delete_message_at(self, index: int) -> None:
+        """Delete message `index` and everything after it — in BOTH the view
+        and kani's history, never one-sided (DDGS's exchange rule): a kept
+        view over a full history would resurrect on the next save, and an
+        orphaned tool_calls pair would 400 the next send."""
+        if state.busy:
+            self._notify_info("Stop the current generation before deleting.")
+            return
+        msgs = state.messages
+        if not (0 <= index < len(msgs)):
+            return
+        keep = msgs[:index]
+        state.messages = keep
+        agent = self.services.agent
+        chat_history = agent.kani.chat_history if agent.kani is not None else None
+        if chat_history is not None:
+            if not keep:
+                chat_history.clear()
+            else:
+                # Cut after the kani message that projects to the last KEPT
+                # display entry. Error rows are display-only (the projection
+                # never emits them), so they must not count toward the
+                # target — otherwise the cut lands too late (or never).
+                target = len([m for m in keep if m.get("role") != "error"])
+                emitted = 0
+                cut = len(chat_history)
+                for i, message in enumerate(chat_history):
+                    if not str(getattr(message, "text", "") or ""):
+                        continue
+                    emitted += 1
+                    if emitted == target:
+                        cut = i + 1
+                        break
+                else:
+                    LOG.warning(
+                        "delete: kani history shorter than the view (%d < %d)",
+                        emitted,
+                        target,
+                    )
+                # Everything from the cut on — including empty rows that
+                # trailed the last kept message — belongs to deleted turns.
+                del chat_history[cut:]
+        if not keep:
+            self._new_conversation()
+            return
+        self.page.run_task(self._save_history_task)
+        self._notify_info("Message deleted.")
+
     def _delete_conversation(self, conversation_id: str) -> None:
         was_active = conversation_id == state.active_conversation
         if was_active and state.busy:
@@ -1772,7 +1821,12 @@ class AppController:
             state.update_info,
             self._url_launcher,
             on_close=self._dismiss_update,
+            theme_mode=state.theme_mode,
         )
+        # Sherlock pattern: pop the stale dialog first — a second tap on the
+        # sticky chip while open raised RuntimeError from show_dialog.
+        with contextlib.suppress(Exception):
+            self.page.pop_dialog()
         self.page.show_dialog(dialog)
 
     def _dismiss_update(self) -> None:

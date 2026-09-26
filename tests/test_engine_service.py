@@ -252,3 +252,62 @@ def test_loadable_download_replaces_the_cache_cleanly(monkeypatch, tmp_path) -> 
     cache = storage.engine_cache_path()
     assert cache.read_bytes() == FIXTURE_BYTES
     assert not cache.with_name(cache.stem + ".new.py").exists()
+
+
+def test_health_and_limits_send_the_user_agent(monkeypatch) -> None:
+    """The download was fixed; the two probes beside it were the last calls
+    still sending Python-urllib/3.x (house rule: explicit UA everywhere)."""
+    from services import engine as engine_mod
+
+    captured: dict[str, str] = {}
+
+    def _boom(request, timeout=None):
+        captured["ua"] = request.get_header("User-agent")
+        raise OSError("no gateway")
+
+    monkeypatch.setattr(engine_mod.urllib.request, "urlopen", _boom)
+    assert EngineService._health(8082) is None
+    assert "LM-Router" in captured.get("ua", ""), captured
+
+    captured.clear()
+    assert EngineService._fetch_account_limits(8082) is None
+    assert "LM-Router" in captured.get("ua", ""), captured
+
+
+def test_download_retries_once_then_raises(monkeypatch) -> None:
+    from services import engine as engine_mod
+
+    monkeypatch.setattr(engine_mod.time, "sleep", lambda _s: None)
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b'VERSION = "1.0.0"\nif __name__ == "__main__":\n    pass'
+
+    calls = {"n": 0}
+
+    def _flaky(request, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("blip")
+        return _Resp()
+
+    monkeypatch.setattr(engine_mod.urllib.request, "urlopen", _flaky)
+    assert engine_mod._download("https://example.invalid/run.py")
+    assert calls["n"] == 2, "one bounded retry"
+
+    def _dead(request, timeout=None):
+        raise OSError("down")
+
+    monkeypatch.setattr(engine_mod.urllib.request, "urlopen", _dead)
+    try:
+        engine_mod._download("https://example.invalid/run.py")
+    except OSError:
+        pass
+    else:
+        raise AssertionError("exhausted retries must raise")

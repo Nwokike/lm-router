@@ -22,7 +22,6 @@ import contextlib
 import http.client
 import json
 import socket
-import ssl
 import threading
 import time
 from collections.abc import Callable
@@ -37,6 +36,7 @@ _BYPASS_HEADER = b"bypass-tunnel-reminder: true\r\n"
 
 _CONNECT_TIMEOUT = 10.0
 _PIPE_CHUNK = 65536
+_MAX_HEAD_BYTES = 65536
 
 
 class TunnelError(RuntimeError):
@@ -60,6 +60,14 @@ class LocalTunnel:
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._on_error = on_error
+        # Live relay sockets, tracked so stop() can unblock a recv/connect
+        # immediately instead of waiting out the 10s socket timeout.
+        self._socks: set[socket.socket] = set()
+        self._socks_lock = threading.Lock()
+        # Debounce: a flapping relay rewrote the red share banner every
+        # backoff tick (15s, forever). Report on change, else at most 60s.
+        self._last_error_key = ""
+        self._last_error_at = 0.0
 
     # ── setup ─────────────────────────────────────────────────────────
     def start(self, timeout: float = 20.0) -> str:
@@ -92,14 +100,14 @@ class LocalTunnel:
         while time.monotonic() < deadline:
             try:
                 conn = http.client.HTTPSConnection("localtunnel.me", timeout=_CONNECT_TIMEOUT)
-                conn.request(
-                    "GET",
-                    "/?new",
-                    headers={"User-Agent": "LM-Router", "Accept": "application/json"},
-                )
-                response = conn.getresponse()
-                body = response.read()
-                conn.close()
+                with contextlib.closing(conn):
+                    conn.request(
+                        "GET",
+                        "/?new",
+                        headers={"User-Agent": "LM-Router", "Accept": "application/json"},
+                    )
+                    response = conn.getresponse()
+                    body = response.read()
                 if response.status != 200:
                     raise TunnelError(f"Tunnel service returned HTTP {response.status}.")
                 data = json.loads(body)
@@ -118,23 +126,49 @@ class LocalTunnel:
         backoff = 1.0
         while not self._stop.is_set():
             try:
+                # socket context managers close both ends on exit; tracking
+                # exists so stop() can SHUTDOWN a parked recv immediately.
+                # Nested try/finally: 'local' must never be referenced when
+                # its connect raised (the old layout logged a NameError as a
+                # dropped connection and leaked the relay from the set).
                 with socket.create_connection(
                     (self._host, self._relay_port), timeout=_CONNECT_TIMEOUT
                 ) as relay:
                     relay.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-                    with socket.create_connection(
-                        ("127.0.0.1", self.local_port), timeout=_CONNECT_TIMEOUT
-                    ) as local:
-                        backoff = 1.0
-                        self._pump(relay, local)
+                    self._track(relay)
+                    try:
+                        with socket.create_connection(
+                            ("127.0.0.1", self.local_port), timeout=_CONNECT_TIMEOUT
+                        ) as local:
+                            self._track(local)
+                            try:
+                                backoff = 1.0
+                                self._pump(relay, local)
+                            finally:
+                                self._untrack(local)
+                    finally:
+                        self._untrack(relay)
             except Exception as exc:
                 if self._stop.is_set():
                     return
                 LOG.warning("tunnel conn %s dropped: %s", index, exc)
                 if self._on_error is not None:
-                    self._on_error(f"Tunnel connection dropped: {exc}")
+                    now = time.monotonic()
+                    key = str(exc)
+                    if key != self._last_error_key or now - self._last_error_at >= 60.0:
+                        self._last_error_key = key
+                        self._last_error_at = now
+                        self._on_error(f"Tunnel connection dropped: {exc}")
                 self._stop.wait(backoff)
                 backoff = min(backoff * 2, 15.0)
+
+    def _track(self, sock: socket.socket) -> None:
+        with self._socks_lock:
+            self._socks.add(sock)
+
+    def _untrack(self, sock: socket.socket) -> None:
+        with self._socks_lock:
+            self._socks.discard(sock)
 
     def _pump(self, relay: socket.socket, local: socket.socket) -> None:
         """Splice bytes in both directions until either side closes."""
@@ -153,22 +187,36 @@ class LocalTunnel:
                 done.set()
                 _shutdown(local)
 
+        pending = b""
+        head_done = False
+
         def downstream() -> None:
+            nonlocal pending, head_done
             try:
                 while not done.is_set():
                     data = local.recv(_PIPE_CHUNK)
                     if not data:
                         break
-                    # Stop localtunnel's HTML reminder page appearing above our
-                    # API responses.
-                    head, sep, rest = data.partition(b"\r\n\r\n")
-                    if sep and b"HTTP/" in head[:16]:
-                        head = head.replace(b"\r\n", b"\r\n", 1)
-                        if b"\r\n" in head and _BYPASS_HEADER.split(b":")[0] not in head.lower():
-                            head = head + b"\r\n" + _BYPASS_HEADER.rstrip(b"\r\n")
-                            head = head.rstrip(b"\r\n")
-                        data = head + sep + rest
-                    relay.sendall(data)
+                    if head_done:
+                        relay.sendall(data)
+                        continue
+                    # Buffer until the header terminator arrives: the old
+                    # single-recv partition missed any response whose headers
+                    # spanned two TCP chunks, and the bypass header was never
+                    # injected (the reminder page came back).
+                    pending += data
+                    head, sep, rest = pending.partition(b"\r\n\r\n")
+                    if not sep:
+                        if len(pending) <= _MAX_HEAD_BYTES:
+                            continue
+                        # Pathological (no header end): pass through as-is.
+                        relay.sendall(pending)
+                        pending = b""
+                        head_done = True
+                        continue
+                    relay.sendall(_augment_head(head, sep) + rest)
+                    pending = b""
+                    head_done = True
             except OSError:
                 pass
             finally:
@@ -190,8 +238,30 @@ class LocalTunnel:
     # ── teardown ──────────────────────────────────────────────────────
     def stop(self) -> None:
         self._stop.set()
+        # Unblock every parked recv/connect NOW — with only the event set, a
+        # live pump kept splicing for up to the 10s socket timeout after a
+        # stop->start cycle, and old loops could feed the new session.
+        with self._socks_lock:
+            socks = list(self._socks)
+            self._socks.clear()
+        for sock in socks:
+            _shutdown(sock)
+        for thread in self._threads:
+            thread.join(timeout=2.0)
+        self._threads = []
         self.public_url = ""
         LOG.info("tunnel stopped")
+
+
+def _augment_head(head: bytes, sep: bytes) -> bytes:
+    """Insert localtunnel's bypass header before the blank line (once).
+
+    Pure so it is testable: non-HTTP heads and heads that already carry the
+    header pass through byte-identical.
+    """
+    if b"HTTP/" not in head[:16] or b"bypass-tunnel-reminder" in head.lower():
+        return head + sep
+    return head + b"\r\n" + _BYPASS_HEADER.rstrip(b"\r\n") + sep
 
 
 def _shutdown(sock: socket.socket) -> None:
@@ -199,7 +269,3 @@ def _shutdown(sock: socket.socket) -> None:
         sock.shutdown(socket.SHUT_RDWR)
     with contextlib.suppress(OSError):
         sock.close()
-
-
-def tls_context() -> ssl.SSLContext:
-    return ssl.create_default_context()

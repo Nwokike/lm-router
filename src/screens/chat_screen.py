@@ -98,7 +98,51 @@ _ACTION_ICONS = {
     "Copy": ft.Icons.CONTENT_COPY_ROUNDED,
     "Edit & resend": ft.Icons.EDIT_ROUNDED,
     "Regenerate": ft.Icons.REFRESH_ROUNDED,
+    "Delete": ft.Icons.DELETE_OUTLINE_ROUNDED,
 }
+
+
+def _confirm_delete(index: int) -> None:
+    """Delete this message and everything after it — confirm first (DDGS).
+
+    Truncation keeps the VIEW and kani's history in lockstep (the controller
+    does the cutting): a kept view over a full history would resurrect on the
+    next save, and an orphaned tool_calls pair would 400 the next send.
+    """
+    page = getattr(ft.context, "page", None)
+    if page is None:
+        return
+    controller = getattr(page, "_lmrouter_controller", None)
+    if controller is None:
+        return
+
+    def _do(_e: object) -> None:
+        page.pop_dialog()
+        controller.delete_message_at(index)
+
+    page.show_dialog(
+        ft.AlertDialog(
+            modal=True,
+            title=ft.Text(
+                "Delete message?",
+                size=tokens.FONT_TITLE,
+                weight=ft.FontWeight.W_600,
+            ),
+            content=ft.Text(
+                "Deletes this message and everything after it in this conversation.",
+                size=tokens.FONT_BODY_SM,
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _e: page.pop_dialog()),
+                ft.FilledButton(
+                    "Delete",
+                    style=ft.ButtonStyle(color=ft.Colors.ERROR),
+                    on_click=_do,
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        ),
+    )
 
 
 def _action_row(actions: list[tuple[str, Callable[[], None]]]) -> ft.Control:
@@ -247,6 +291,8 @@ def ChatScreen():
                         lambda c=content: _open_edit_dialog(c),
                     ),
                 )
+            if not state.busy:
+                user_actions.append(("Delete", lambda i=index: _confirm_delete(i)))
             rows.append(
                 ft.Row(
                     expand=True,
@@ -363,6 +409,8 @@ def ChatScreen():
                 asst_actions.append(("Copy", lambda c=content: methods.copy_text(c)))
             if index == last_assistant_index and not state.busy:
                 asst_actions.append(("Regenerate", lambda: methods.regenerate_last()))
+            if not state.busy:
+                asst_actions.append(("Delete", lambda i=index: _confirm_delete(i)))
             rows.append(
                 ft.Column(
                     spacing=tokens.SPACE_XXS,

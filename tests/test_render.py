@@ -788,3 +788,108 @@ def test_endpoint_reference_starts_collapsed(_renderer_page) -> None:
         root._detach_observable_subscriptions()
         root._state.mounted = False
         state.gateway_running = saved
+
+
+def test_delete_message_flows_through_confirm(_renderer_page) -> None:
+    """Every non-busy bubble offers Delete; the dialog must confirm before
+    the controller cuts (DDGS _confirm_delete_turn)."""
+    from types import SimpleNamespace
+
+    from core.state import state
+    from screens.chat_screen import ChatScreen
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    deleted: list[int] = []
+    methods = ControllerMethods()
+    _renderer_page._lmrouter_controller = SimpleNamespace(
+        delete_message_at=lambda i: deleted.append(i),
+    )
+
+    saved = (state.messages, state.busy, state.gateway_running)
+    state.gateway_running = True
+    state.busy = False
+    state.messages = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "a1"},
+        {"role": "user", "content": "q2"},
+    ]
+    try:
+        root = _render(lambda: ControllerMethodsCtx(methods, ChatScreen))
+        buttons = [
+            node
+            for node in _walk_all(root)
+            if isinstance(node, ft.IconButton) and node.tooltip == "Delete"
+        ]
+        assert len(buttons) == 3, "every non-busy bubble gets a Delete"
+
+        # Cancel first: nothing reaches the controller.
+        buttons[1].on_click(None)
+        dialog = _renderer_page.dialog
+        assert isinstance(dialog, ft.AlertDialog)
+        assert "Delete message" in getattr(dialog.title, "value", "")
+        cancel = next(a for a in dialog.actions if isinstance(a, ft.TextButton))
+        cancel.on_click(None)
+        assert deleted == []
+        assert _renderer_page.dialog is None
+
+        # Confirm: exactly the assistant index (1) is cut.
+        buttons[1].on_click(None)
+        confirm = next(a for a in _renderer_page.dialog.actions if isinstance(a, ft.FilledButton))
+        confirm.on_click(None)
+        assert deleted == [1]
+        assert _renderer_page.dialog is None
+
+        # Busy: no Delete anywhere.
+        state.busy = True
+        root2 = _render(lambda: ControllerMethodsCtx(methods, ChatScreen))
+        busy_buttons = [
+            node
+            for node in _walk_all(root2)
+            if isinstance(node, ft.IconButton) and node.tooltip == "Delete"
+        ]
+        assert busy_buttons == [], "no destructive actions mid-stream"
+        root2._detach_observable_subscriptions()
+        root2._state.mounted = False
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        _renderer_page._lmrouter_controller = None
+        state.messages, state.busy, state.gateway_running = saved
+
+
+def test_decimal_fields_use_a_typable_keypad(_renderer_page) -> None:
+    """Android's NUMBER keypad cannot type '0.7' — the float fields must be
+    TEXT (clamping handles validation); integer fields keep NUMBER.
+
+    The advanced generation fields sit behind the card's expand toggle (fresh
+    renders always start collapsed), so those four `decimal=True` call sites
+    are pinned from source here."""
+    from pathlib import Path as _Path
+
+    from core.state import state
+    from screens.settings_screen import SettingsScreen
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    saved = state.onboarding_done
+    state.onboarding_done = True
+    try:
+        root = _render(lambda: ControllerMethodsCtx(ControllerMethods(), SettingsScreen))
+        fields = {
+            getattr(node, "label", None): getattr(node, "keyboard_type", None)
+            for node in _walk_all(root)
+            if isinstance(node, ft.TextField) and getattr(node, "label", None)
+        }
+        assert fields.get("Temperature") == ft.KeyboardType.TEXT, fields
+        assert fields.get("Max reply tokens") == ft.KeyboardType.NUMBER, fields
+        assert fields.get("Port") == ft.KeyboardType.NUMBER, fields
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.onboarding_done = saved
+
+    source = (
+        _Path(__file__).resolve().parents[1] / "src" / "screens" / "settings_screen.py"
+    ).read_text(encoding="utf-8")
+    assert source.count("decimal=True") == 4, (
+        "Top P / Presence / Frequency must all use the typable keypad"
+    )

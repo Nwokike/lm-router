@@ -33,6 +33,7 @@ class ControllerMethods:
     new_conversation: Callable[[], None] = _noop
     open_conversation: Callable[[str], None] = _noop
     delete_conversation: Callable[[str], None] = _noop
+    delete_message_at: Callable[[int], None] = _noop
     copy_text: Callable[[str], None] = _noop
     copy_logs: Callable[[], None] = _noop
     export_conversation: Callable[[str], None] = _noop

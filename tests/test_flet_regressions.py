@@ -700,3 +700,22 @@ def test_autostart_switch_persists_immediately(stub_page, monkeypatch):
     finally:
         component._detach_observable_subscriptions()
         component._state.mounted = False
+
+
+def test_update_dialog_follows_the_live_theme(stub_page):
+    """The dialog hardcoded theme_mode='system': a dark-mode user on a light
+    OS got light-styled release notes inside a dark app."""
+    from components.update_dialog import build_update_dialog
+
+    def _code_theme(mode: str):
+        dialog = build_update_dialog(
+            stub_page, {"title": "X", "release_notes": "notes"}, None, theme_mode=mode
+        )
+        container = dialog.content
+        column = container.content
+        markdown = next(c for c in column.controls if isinstance(c, ft.Markdown))
+        return markdown.code_theme
+
+    dark = _code_theme("dark")
+    light = _code_theme("light")
+    assert dark != light, "the dialog must render per the app's actual theme"

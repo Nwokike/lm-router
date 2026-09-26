@@ -453,14 +453,22 @@ def SettingsScreen():
         ],
     )
 
-    def _num_field(label: str, value: str, setter, width: int = 150) -> ft.TextField:
+    def _num_field(
+        label: str,
+        value: str,
+        setter,
+        width: int = 150,
+        decimal: bool = False,
+    ) -> ft.TextField:
         return ft.TextField(
             label=label,
             value=value,
             width=width,
             dense=True,
             text_size=tokens.FONT_BODY_SM,
-            keyboard_type=ft.KeyboardType.NUMBER,
+            # Android's NUMBER keypad is digits-only: "0.7" was literally
+            # untypable for the float fields (clamping handles the rest).
+            keyboard_type=ft.KeyboardType.TEXT if decimal else ft.KeyboardType.NUMBER,
             on_change=lambda e, s=setter: s(str(e.control.value or "")),
         )
 
@@ -479,7 +487,9 @@ def SettingsScreen():
                     spacing=tokens.SPACE_SM,
                     wrap=True,
                     controls=[
-                        _num_field("Temperature", gen_temperature, set_gen_temperature),
+                        _num_field(
+                            "Temperature", gen_temperature, set_gen_temperature, decimal=True
+                        ),
                         _num_field("Max reply tokens", gen_max_tokens, set_gen_max_tokens),
                     ],
                 ),
@@ -543,7 +553,7 @@ def SettingsScreen():
                             spacing=tokens.SPACE_SM,
                             wrap=True,
                             controls=[
-                                _num_field("Top P", gen_top_p, set_gen_top_p),
+                                _num_field("Top P", gen_top_p, set_gen_top_p, decimal=True),
                                 _num_field(
                                     "Context window",
                                     gen_context,
@@ -558,8 +568,15 @@ def SettingsScreen():
                             spacing=tokens.SPACE_SM,
                             wrap=True,
                             controls=[
-                                _num_field("Presence penalty", gen_presence, set_gen_presence),
-                                _num_field("Frequency penalty", gen_frequency, set_gen_frequency),
+                                _num_field(
+                                    "Presence penalty", gen_presence, set_gen_presence, decimal=True
+                                ),
+                                _num_field(
+                                    "Frequency penalty",
+                                    gen_frequency,
+                                    set_gen_frequency,
+                                    decimal=True,
+                                ),
                             ],
                         ),
                     ),
