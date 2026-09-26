@@ -947,3 +947,112 @@ def test_router_guide_switch_renders(_renderer_page) -> None:
         root._detach_observable_subscriptions()
         root._state.mounted = False
         state.onboarding_done = saved
+
+
+def test_tool_cards_render_before_their_reply(_renderer_page) -> None:
+    """DDGS parity: the tool cards a turn produced appear BEFORE the reply.
+
+    The reply is written into a placeholder that keeps its original index
+    while tool results append at the end of the list, so without
+    _display_order the cards landed below the response they produced.
+    state.messages itself must stay untouched (history and the API payload
+    read the original order).
+    """
+    from core.state import state
+    from screens.chat_screen import ChatScreen, _display_order
+
+    # Unit: indices, reordered for display, originals preserved.
+    messages = [
+        {"role": "user", "content": "search"},
+        {"role": "assistant", "content": "Found it: answer"},
+        {"role": "tool", "name": "web_search", "content": "results..."},
+    ]
+    assert _display_order(messages) == [0, 2, 1]
+    # Two turns: each run attaches to its own reply.
+    two_turns = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "a1"},
+        {"role": "tool", "name": "t", "content": "r1"},
+        {"role": "user", "content": "q2"},
+        {"role": "assistant", "content": "a2"},
+        {"role": "tool", "name": "t", "content": "r2"},
+    ]
+    assert _display_order(two_turns) == [0, 2, 1, 3, 5, 4]
+    # No tools: identity (a plain chat must be byte-for-byte the same).
+    plain = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]
+    assert _display_order(plain) == [0, 1]
+
+    saved = (state.messages, state.busy, state.gateway_running, state.onboarding_done)
+    state.busy = False
+    state.gateway_running = True
+    state.onboarding_done = True
+    state.messages = messages
+    root = _render(ChatScreen)
+    try:
+        walked = list(_walk_all(root))  # one-shot generator: share ONE pass
+        # The tool card's header row carries the tool name (ToolCallBlock is
+        # a component builder, not a type, so detect it by its name Text).
+        tool_pos = next(
+            i
+            for i, node in enumerate(walked)
+            if isinstance(node, ft.Text) and getattr(node, "value", None) == "web_search"
+        )
+        reply_pos = next(
+            i
+            for i, node in enumerate(walked)
+            if isinstance(node, ft.Markdown) and getattr(node, "value", None) == "Found it: answer"
+        )
+        assert tool_pos < reply_pos, "tool cards must render before the reply"
+        # And the source list kept its original order.
+        assert state.messages[1]["role"] == "assistant", "state.messages must not reorder"
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.messages, state.busy, state.gateway_running, state.onboarding_done = saved
+
+
+def test_settings_mcp_dropdown_lists_tools_per_server(
+    tmp_path, monkeypatch, _renderer_page
+) -> None:
+    """Owner ask: a dropdown under each MCP server to enable/disable its
+    tools, like the chat MCP dialog, not only after a Test run."""
+    from pathlib import Path as _Path
+
+    from core.settings import AppSettings, MCPServerConfig
+    from core.state import state
+    from screens.settings_screen import SettingsScreen
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    monkeypatch.setenv("FLET_APP_STORAGE_DATA", str(tmp_path))
+    AppSettings(
+        mcp_servers=[
+            MCPServerConfig(name="demo", transport="streamable_http", url="https://x.test/mcp"),
+        ],
+    ).save()
+
+    saved = (state.onboarding_done, state.mcp_tools)
+    state.onboarding_done = True
+    state.mcp_tools = ["demo.echo", "demo.add", "other.hidden"]
+    try:
+        root = _render(lambda: ControllerMethodsCtx(ControllerMethods(), SettingsScreen))
+        texts = [
+            getattr(node, "value", None) for node in _walk_all(root) if isinstance(node, ft.Text)
+        ]
+        assert "Tools (2)" in texts, "the dropdown shows the server's live tool count"
+        # Collapsed by default: tool NAMES must not leak until expanded,
+        # and another server's tools never belong to this dropdown.
+        assert "echo" not in texts and "other.hidden" not in texts
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.onboarding_done, state.mcp_tools = saved
+
+    # The expanded panel (click state cannot be driven by the harness):
+    # live switches, tested fallback, honest empty state, mobile hint.
+    source = (
+        _Path(__file__).resolve().parents[1] / "src" / "screens" / "settings_screen.py"
+    ).read_text(encoding="utf-8")
+    assert "live_tools_for(" in source
+    assert "set_mcp_expanded" in source
+    assert "No tools listed yet. Run Test" in source
+    assert "This phone cannot run local (stdio) servers" in source

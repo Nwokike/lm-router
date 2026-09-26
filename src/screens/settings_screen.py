@@ -16,12 +16,26 @@ from services.mcp import split_stdio_command
 from state.controller_ctx import ControllerMethodsCtx
 
 
+def live_tools_for(mcp_tools: list[str], server_name: str) -> list[str]:
+    """Short names of one server's currently connected tools, in catalog order.
+
+    Live names arrive fully qualified (`server.tool`); the disable list and
+    toggle API use SHORT names, so strip the configured server's own prefix.
+    (Splitting on the first dot would break a server whose name contains one.)
+    """
+    prefix = f"{server_name}."
+    return [t[len(prefix) :] for t in mcp_tools if t.startswith(prefix)]
+
+
 @ft.component
 def SettingsScreen():
     state = ft.use_context(AppStateCtx)
     methods = ft.use_context(ControllerMethodsCtx)
     _ = state.update_info
     _ = state.mcp_test_results
+    # Live tool names (server.tool) feed each server's Tools dropdown; without
+    # this read the panel never refreshed when a connection brought tools in.
+    _ = state.mcp_tools
     # Load settings ONCE. `AppSettings.load()` decrypts provider keys and
     # touches disk; calling it in the render body re-read the file on every
     # keystroke and every log bump.
@@ -34,6 +48,15 @@ def SettingsScreen():
     page = getattr(ft.context, "page", None)
     is_dark = theme.is_dark_mode(page, state.theme_mode)
     narrow = bool(page and getattr(page, "width", None) and page.width < 600)
+    # Mobile can only reach REMOTE MCP servers: the APK has no subprocess
+    # model for stdio (the connect-time refusal still stands; this hint
+    # warns before the user types a command that can never run here).
+    is_mobile = False
+    try:
+        if page is not None and getattr(page, "platform", None):
+            is_mobile = bool(page.platform.is_mobile())
+    except Exception:
+        is_mobile = False
 
     draft_prompt, set_draft_prompt = ft.use_state(settings.system_prompt)
     port_text, set_port_text = ft.use_state(str(settings.gateway_port))
@@ -42,6 +65,7 @@ def SettingsScreen():
     search_on, set_search_on = ft.use_state(settings.search_enabled)
     provider_open, set_provider_open = ft.use_state(False)
     mcp_open, set_mcp_open = ft.use_state(False)
+    mcp_expanded, set_mcp_expanded = ft.use_state("")
     p_name, set_p_name = ft.use_state("")
     p_url, set_p_url = ft.use_state("")
     p_key, set_p_key = ft.use_state("")
@@ -814,24 +838,64 @@ def SettingsScreen():
             status_text += f" · {disabled_count} tool(s) disabled"
 
         test_controls: list[ft.Control] = []
+        tested_tools: list[dict] = []
         if result:
             if result.get("kind") == "ok" and "tools" in result:
-                tools = result["tools"]
-                invalid_schemas = [t for t in tools if not t.get("schema_valid", True)]
+                tested_tools = result["tools"]
+                invalid_schemas = [t for t in tested_tools if not t.get("schema_valid", True)]
                 summary_color = ft.Colors.GREEN if not invalid_schemas else ft.Colors.AMBER
                 summary_text = (
-                    f"✓ {len(tools)} tools verified (schemas valid)"
+                    f"✓ {len(tested_tools)} tools verified (schemas valid)"
                     if not invalid_schemas
-                    else f"⚠ {len(tools)} tools ({len(invalid_schemas)} schema warning)"
+                    else f"⚠ {len(tested_tools)} tools ({len(invalid_schemas)} schema warning)"
                 )
                 test_controls.append(
                     ft.Text(summary_text, size=tokens.FONT_SM, color=summary_color)
                 )
-                for t in tools:
+            else:
+                err_msg = result.get("message") or "Test failed."
+                test_controls.append(
+                    ft.Text(f"✗ {err_msg}", size=tokens.FONT_SM, color=ft.Colors.ERROR)
+                )
+
+        # Tools dropdown: live (connected) names win; the last Test's names
+        # fill in before a connection exists; otherwise say what to do.
+        # Per-server toggling lives HERE (and in the chat MCP dialog), not
+        # only after a Test the user may never run.
+        live_tools = live_tools_for(state.mcp_tools, server.name)
+        expanded = mcp_expanded == server.id
+        tool_count = len(live_tools) or len(tested_tools)
+        tool_panel: list[ft.Control] = []
+        if expanded:
+            if live_tools:
+                for tool_name in live_tools:
+                    active = tool_name not in getattr(server, "disabled_tools", [])
+                    tool_panel.append(
+                        ft.Row(
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            controls=[
+                                ft.Text(
+                                    tool_name,
+                                    size=tokens.FONT_SM,
+                                    selectable=True,
+                                    color=ft.Colors.ON_SURFACE_VARIANT if not active else None,
+                                ),
+                                ft.Switch(
+                                    value=active,
+                                    active_color=ft.Colors.PRIMARY,
+                                    on_change=lambda e, sid=server.id, tn=tool_name: (
+                                        methods.toggle_mcp_tool(sid, tn)
+                                    ),
+                                ),
+                            ],
+                        )
+                    )
+            elif tested_tools:
+                for t in tested_tools:
                     t_name = t.get("name", "")
                     t_disabled = t_name in getattr(server, "disabled_tools", [])
                     t_valid = t.get("schema_valid", True)
-                    test_controls.append(
+                    tool_panel.append(
                         ft.Row(
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                             wrap=False,
@@ -864,12 +928,16 @@ def SettingsScreen():
                                     ),
                                 ),
                             ],
-                        ),
+                        )
                     )
             else:
-                err_msg = result.get("message") or "Test failed."
-                test_controls.append(
-                    ft.Text(f"✗ {err_msg}", size=tokens.FONT_SM, color=ft.Colors.ERROR)
+                tool_panel.append(
+                    ft.Text(
+                        "No tools listed yet. Run Test, or start the gateway "
+                        "with this server enabled.",
+                        size=tokens.FONT_XS,
+                        color=ft.Colors.ON_SURFACE_VARIANT,
+                    ),
                 )
 
         mcp_rows.append(
@@ -939,6 +1007,31 @@ def SettingsScreen():
                             ],
                         ),
                         *test_controls,
+                        # The dropdown: same chevron affordance as the
+                        # generation card's Advanced section.
+                        ft.Container(
+                            ink=True,
+                            on_click=lambda _, sid=server.id: set_mcp_expanded(
+                                "" if mcp_expanded == sid else sid
+                            ),
+                            content=ft.Row(
+                                spacing=tokens.SPACE_TIGHT,
+                                controls=[
+                                    ft.Icon(
+                                        ft.Icons.EXPAND_LESS_ROUNDED
+                                        if expanded
+                                        else ft.Icons.EXPAND_MORE_ROUNDED,
+                                        size=tokens.ICON_XS,
+                                    ),
+                                    ft.Text(
+                                        "Tools" + (f" ({tool_count})" if tool_count else ""),
+                                        size=tokens.FONT_SM,
+                                        weight=ft.FontWeight.W_600,
+                                    ),
+                                ],
+                            ),
+                        ),
+                        *tool_panel,
                     ],
                 ),
             ),
@@ -967,6 +1060,28 @@ def SettingsScreen():
                             str(e.control.value or "streamable_http")
                         ),
                     ),
+                ),
+                *(
+                    [
+                        _pad(
+                            ft.Container(
+                                padding=ft.Padding.symmetric(
+                                    horizontal=tokens.SPACE_SNUG,
+                                    vertical=tokens.SPACE_SM,
+                                ),
+                                border_radius=tokens.RADIUS_MD,
+                                bgcolor=ft.Colors.with_opacity(tokens.OPACITY_FAINT, theme.WARNING),
+                                content=ft.Text(
+                                    "This phone cannot run local (stdio) servers. "
+                                    "Use streamable_http or sse instead.",
+                                    size=tokens.FONT_2XS,
+                                    color=theme.WARNING,
+                                ),
+                            ),
+                        ),
+                    ]
+                    if is_mobile and m_transport == "stdio"
+                    else []
                 ),
                 _pad(
                     ft.TextField(

@@ -153,3 +153,18 @@ def test_base_dir_never_anchors_to_the_cwd(tmp_path, monkeypatch) -> None:
     absolute = tmp_path / "data"
     monkeypatch.setenv("FLET_APP_STORAGE_DATA", str(absolute))
     assert storage.base_dir() == absolute
+
+
+def test_live_tools_for_strips_only_its_own_server_prefix() -> None:
+    """The dropdown lists ONE server's tools, short-named for the toggle API.
+
+    Splitting on the first dot would corrupt a server whose own name
+    contains one; prefix-strip is the only correct mapping, and a sibling
+    server whose name merely STARTS with ours must never leak in.
+    """
+    from screens.settings_screen import live_tools_for
+
+    tools = ["demo.echo", "demo.add", "demo.tools.calc", "demo2.hidden", "other.x"]
+    assert live_tools_for(tools, "demo") == ["echo", "add", "tools.calc"]
+    assert live_tools_for(tools, "demo2") == ["hidden"]
+    assert live_tools_for(tools, "absent") == []

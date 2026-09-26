@@ -22,6 +22,41 @@ from state.controller_ctx import ControllerMethodsCtx
 BANNER_AD_EVERY_N_REPLIES = 1
 
 
+def _display_order(messages: list[dict]) -> list[int]:
+    """Original indices in the order rows should appear (DDGS parity).
+
+    The assistant reply is written INTO a placeholder that keeps its
+    original position, while tool results append at the end of the list,
+    so the cards a turn produced landed AFTER the reply they produced.
+    DDGS shows tool cards before the response; move each run of tool rows
+    directly ahead of the assistant/error message it follows.
+
+    state.messages itself is NEVER reordered: history, regeneration and
+    the API payload all read the original order, and reordering it there
+    would put tool results before the message that requested them.
+    """
+    order: list[int] = []
+    i = 0
+    total = len(messages)
+    while i < total:
+        if messages[i].get("role") == "tool":
+            j = i
+            while j < total and messages[j].get("role") == "tool":
+                j += 1
+            if order and messages[order[-1]].get("role") in ("assistant", "error"):
+                # Attach the run to the reply it belongs to: reply goes last.
+                reply = order.pop()
+                order.extend(range(i, j))
+                order.append(reply)
+            else:
+                order.extend(range(i, j))
+            i = j
+        else:
+            order.append(i)
+            i += 1
+    return order
+
+
 def _open_edit_dialog(current_text: str) -> None:
     """Edit-and-resend the last user turn via a small dialog."""
     page = getattr(ft.context, "page", None)
@@ -265,7 +300,9 @@ def ChatScreen():
     )
     is_dark = is_dark_page
     assistant_replies = 0
-    for index, message in enumerate(state.messages):
+    display_order = _display_order(state.messages)
+    for position, index in enumerate(display_order):
+        message = state.messages[index]
         role = message.get("role", "assistant")
         content = message.get("content", "")
         if role == "user":
@@ -439,8 +476,11 @@ def ChatScreen():
             )
             assistant_replies += 1
             # Never-last rule: a banner is skipped when this reply is the final
-            # message, so the bottom of the thread is always a real message.
-            if assistant_replies % BANNER_AD_EVERY_N_REPLIES == 0 and index < last_index:
+            # ROW (display position, not original index: tool cards reorder
+            # ahead of their reply), so the thread always ends on a message.
+            if assistant_replies % BANNER_AD_EVERY_N_REPLIES == 0 and position + 1 < len(
+                display_order
+            ):
                 rows.append(build_banner_ad())
 
     if state.busy:
