@@ -60,6 +60,7 @@ def SettingsScreen():
     gen_reasoning, set_gen_reasoning = ft.use_state(settings.reasoning_effort)
     gen_json_mode, set_gen_json_mode = ft.use_state(settings.json_mode)
     tell_time, set_tell_time = ft.use_state(settings.tell_model_time)
+    router_help, set_router_help = ft.use_state(settings.router_help)
     m_target, set_m_target = ft.use_state("")
     m_headers, set_m_headers = ft.use_state("")
 
@@ -448,6 +449,19 @@ def SettingsScreen():
             _pad(
                 ft.Row(
                     controls=[ft.FilledButton("Save prompt", on_click=_save_prompt)],
+                ),
+            ),
+            setting_row(
+                icon=ft.Icons.INFO_ROUNDED,
+                title="Router guide in chat",
+                subtitle="Answer setup and status questions from built-in knowledge",
+                trailing=ft.Switch(
+                    value=router_help,
+                    active_color=ft.Colors.PRIMARY,
+                    on_change=lambda e: (
+                        set_router_help(bool(e.control.value)),
+                        methods.save_settings({"router_help": bool(e.control.value)}),
+                    ),
                 ),
             ),
         ],

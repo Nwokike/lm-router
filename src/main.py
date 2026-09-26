@@ -33,6 +33,12 @@ from services.file_save import save_text_file
 from services.http import HttpService
 from services.mcp import MCPHub
 from services.reasoning import final_reasoning
+from services.router_guide import ROUTER_GUIDE
+from services.router_tools import (
+    build_models_tool,
+    build_probe_tool,
+    build_status_tool,
+)
 from services.search import build_search_tool
 from services.share import ShareSession, generate_key
 from services.tokenizer import prewarm_tokenizers
@@ -165,6 +171,11 @@ class AppController:
         self.services.agent = agent
         self._search_tool = build_search_tool(http)
         self._time_tool = build_time_tool()
+        # Live-router chat tools (R5): status / catalog / single probe.
+        # Read-only, local, zero-auth; bulk sweeps stay UI buttons on purpose.
+        self._router_status_tool = build_status_tool(http)
+        self._router_models_tool = build_models_tool(http)
+        self._router_probe_tool = build_probe_tool(http)
         agent.start()  # anyio portal thread: hosts kani turns and httpx calls
         try:
             self._url_launcher = ft.UrlLauncher()
@@ -1305,14 +1316,25 @@ class AppController:
         if self.settings.search_enabled and self._search_tool is not None:
             tools.append(self._search_tool)
         tools.extend(self.services.mcp.tools)
+        tools.extend(
+            (
+                self._router_status_tool,
+                self._router_models_tool,
+                self._router_probe_tool,
+            ),
+        )
         return tools, (
             f"{self.services.mcp.generation}:{self.settings.search_enabled}"
-            f":{self.settings.tell_model_time}"
+            f":{self.settings.tell_model_time}:router3"
         )
 
     def _system_prompt(self) -> str:
-        """The stored prompt, plus a clock line when the user opted in."""
-        return with_clock(self.settings.system_prompt, self.settings.tell_model_time)
+        """The built-in router guide (when enabled), the stored prompt, plus
+        a clock line when the user opted in."""
+        base = self.settings.system_prompt
+        if self.settings.router_help:
+            base = f"{ROUTER_GUIDE}\n\n{base}" if base.strip() else ROUTER_GUIDE
+        return with_clock(base, self.settings.tell_model_time)
 
     def _ensure_mcp_owner(self) -> None:
         """Spawn the MCP owner task unless one is already running.
@@ -1491,6 +1513,7 @@ class AppController:
             "tool_max_rounds",
             "tool_retry_attempts",
             "tell_model_time",
+            "router_help",
         }
         updates = {k: v for k, v in data.items() if k in allowed}
         if not updates:

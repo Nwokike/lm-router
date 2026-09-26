@@ -107,3 +107,5 @@ select = ["E", "F", "W", "I", "UP", "S", "RUF", "SIM105"]
 # Tests assert by design; stub excepts are intentional; dummy secrets appear
 # in security-test fixtures on purpose.
 "tests/*" = ["S101", "S105", "S110", "S112"]
+# Prompt copy: line breaks are part of the text the model reads.
+"src/services/router_guide.py" = ["E501"]

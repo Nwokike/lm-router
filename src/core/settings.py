@@ -124,6 +124,9 @@ class AppSettings(BaseSettings):
     # Tell the model what time it is. Without this it guesses at "today".
     # Off by default because it costs ~15 tokens per turn.
     tell_model_time: bool = False
+    # Inject the built-in router guide into the chat system prompt so the
+    # assistant can answer setup/status questions without guessing (R5).
+    router_help: bool = True
 
     @classmethod
     def settings_customise_sources(

@@ -893,3 +893,30 @@ def test_decimal_fields_use_a_typable_keypad(_renderer_page) -> None:
     assert source.count("decimal=True") == 4, (
         "Top P / Presence / Frequency must all use the typable keypad"
     )
+
+
+def test_router_guide_switch_renders(_renderer_page) -> None:
+    """The prompt card owns the guide toggle (default on, per settings)."""
+    from core.state import state
+    from screens.settings_screen import SettingsScreen
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    saved = state.onboarding_done
+    state.onboarding_done = True
+    try:
+        root = _render(lambda: ControllerMethodsCtx(ControllerMethods(), SettingsScreen))
+        blob = " ".join(
+            str(getattr(node, "value", node if isinstance(node, str) else ""))
+            for node in _walk_all(root)
+        )
+        assert "Router guide in chat" in blob, "the guide toggle must be visible"
+        switches = [
+            node
+            for node in _walk_all(root)
+            if isinstance(node, ft.Switch) and node.on_change is not None
+        ]
+        assert switches, "settings switches must be wired"
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.onboarding_done = saved

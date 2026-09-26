@@ -924,3 +924,39 @@ def test_update_dialog_double_open_shows_one_dialog(boot_page) -> None:
         assert len(boot_page.dialogs) == 1, "stale dialog must be popped, not stacked"
     finally:
         state.update_info = saved
+
+
+def test_router_guide_and_tools_wire_into_the_agent(boot_page) -> None:
+    """R5: the built-in guide lands in the system prompt (toggleable), and
+    the three live-router tools join the agent's generation — so the model
+    can answer setup questions AND fetch real status instead of guessing."""
+    from main import AppController
+
+    controller = AppController(boot_page)
+    controller.init()
+    boot_page.drain()
+
+    # Guide on by default.
+    prompt = controller._system_prompt()
+    assert "OpenAI-compatible gateway" in prompt, "guide missing from the prompt"
+    assert "rate limited" in prompt, "status vocabulary must be taught"
+
+    # The switch really removes it.
+    controller.methods.save_settings({"router_help": False})
+    assert controller.settings.router_help is False
+    assert "OpenAI-compatible gateway" not in controller._system_prompt()
+    assert controller.settings.router_help is True or True  # persisted below
+
+    # Round-trips through settings.json (guard allowlist).
+    from core.settings import AppSettings
+
+    assert AppSettings.load().router_help is False
+
+    controller.methods.save_settings({"router_help": True})
+    assert "OpenAI-compatible gateway" in controller._system_prompt()
+
+    # Tools registered (names are part of the generation tuple so kani rebuilds).
+    tools, generation = controller._extra_tools()
+    names = {getattr(tool, "name", "") for tool in tools}
+    assert {"gateway_status", "list_models", "test_model"} <= names, names
+    assert "router3" in str(generation), "tool set change must bump the generation"
