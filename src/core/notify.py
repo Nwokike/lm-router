@@ -1,9 +1,10 @@
 """Scroll-independent message surface (port of Sherlock's core/notify.py).
 
-The shell banner (`state.notice`) is only readable where the shell renders it:
-mid-conversation, during onboarding, or on another screen, the banner can be
-entirely off-screen. A SnackBar is an overlay, so it is the only surface that
-is visible no matter where the user is.
+Notices are SnackBars only. A banner rendered inside the shell is only
+readable where the shell shows it: mid-conversation, during onboarding, or
+on another screen it can be entirely off-screen, and the old top-of-header
+notice bar duplicated every message (banner plus snack) until manually
+dismissed. An overlay is visible no matter where the user is.
 
 `page.snack_bar` does not exist in Flet 1.0 (verified against the installed
 package). The supported path is `page.show_dialog(...)`, and `ft.SnackBar` is
@@ -32,6 +33,7 @@ def show_snack(
     message: str,
     bgcolor: str | None = None,
     duration: int = 4000,
+    floating: bool = False,
 ) -> None:
     """Best-effort snackbar. Logs failures, never raises."""
     if page is None or not message:
@@ -41,6 +43,7 @@ def show_snack(
             content=ft.Text(message, color=_TEXT_COLOR),
             bgcolor=bgcolor or _DEFAULT_BG,
             duration=duration,
+            behavior=ft.SnackBarBehavior.FLOATING if floating else None,
         )
         try:
             page.show_dialog(snack)

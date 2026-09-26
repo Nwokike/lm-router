@@ -1,5 +1,6 @@
 """Unit tests for MCP hub service, transport parameters, and schema validation."""
 
+import shutil
 from typing import ClassVar
 
 import httpx
@@ -24,7 +25,10 @@ def test_build_server_params_all_transports() -> None:
         args=["-y", "test-server"],
     )
     stdio_params = build_server_params(stdio_cfg, is_mobile=False)
-    assert getattr(stdio_params, "command", "") == "npx"
+    # A bare launcher name is resolved before spawn: Windows `npx` must
+    # become npx.CMD, because CreateProcess applies no PATHEXT and spawning
+    # the typed name fails with WinError 2 even though npx is installed.
+    assert getattr(stdio_params, "command", "") == (shutil.which("npx") or "npx")
 
     # Stdio on mobile is rejected
     with pytest.raises(MCPError) as exc_info:
@@ -444,3 +448,280 @@ async def test_serve_cancellation_still_closes_contexts(monkeypatch) -> None:
         await task
     assert closed["n"] == 1, "cancellation must still run the owner's cleanup"
     assert hub._contexts == []
+
+
+@pytest.mark.anyio
+async def test_slow_connect_cancel_does_not_kill_the_owner(monkeypatch) -> None:
+    """A connect that outlives CONNECT_TIMEOUT must land as 'timed out' —
+    not as an escaping CancelledError that kills the owner task and takes
+    MCP down for the session (live bug: slow remote servers did exactly
+    this, unwinding the SDK's anyio scope past every handler)."""
+    import asyncio
+
+    from services import mcp as mcp_mod
+
+    monkeypatch.setattr(mcp_mod, "CONNECT_TIMEOUT", 0.2)
+    statuses: list = []
+
+    class _SlowContext:
+        async def __aenter__(self):
+            await asyncio.sleep(5.0)
+            return []
+
+        async def __aexit__(self, *exc):
+            pass
+
+    class _FastContext:
+        async def __aenter__(self):
+            return []
+
+        async def __aexit__(self, *exc):
+            pass
+
+    contexts = iter([_SlowContext(), _FastContext()])
+    monkeypatch.setattr(
+        "services.mcp.tools_from_mcp_servers",
+        lambda *a, **k: next(contexts),
+    )
+
+    slow = MCPServerConfig(name="slow", transport="sse", url="http://slow/sse")
+    fast = MCPServerConfig(name="fast", transport="sse", url="http://fast/sse")
+    settings = AppSettings(mcp_servers=[slow, fast])
+    hub = MCPHub(settings, on_status=lambda *a: statuses.append(a))
+    try:
+        await hub._connect()  # must NOT raise
+        assert hub.generation >= 1, "connect completed despite the slow server"
+        assert any(len(s) > 1 and s[1] and "timed out" in str(s[1]) for s in statuses), statuses
+        # the fast server still connected (per-server isolation)
+        assert hub._contexts, "the healthy server must survive the slow one"
+    finally:
+        await hub._close_owned()
+
+
+@pytest.mark.anyio
+async def test_dead_stdio_child_reports_its_own_stderr() -> None:
+    """A server that dies on startup must say WHY in the Settings test.
+
+    The SDK only reports "Connection closed", which names no fix; the
+    diagnosis respawn captures the child's own stderr (wrong flag, crash on
+    import, missing script) and appends it to the error the user reads.
+    """
+    import sys
+
+    server = MCPServerConfig(
+        name="bad",
+        transport="stdio",
+        command=sys.executable,
+        args=[
+            "-c",
+            "import sys; sys.stderr.write('unexpected argument: -y'); sys.exit(1)",
+        ],
+    )
+    hub = MCPHub(AppSettings())
+    with pytest.raises(MCPError) as exc:
+        await hub.test(server)
+    assert "unexpected argument: -y" in str(exc.value)
+
+
+@pytest.mark.anyio
+async def test_remote_failure_keeps_the_classified_message(monkeypatch) -> None:
+    """Remote failures are never respawned; the classified fix stands alone."""
+
+    def _boom(_params, **_kwargs):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr("services.mcp.tools_from_mcp_servers", _boom)
+    hub = MCPHub(AppSettings())
+    server = MCPServerConfig(name="remote", transport="streamable_http", url="https://x.test/mcp")
+    with pytest.raises(MCPError) as exc:
+        await hub.test(server)
+    assert str(exc.value) == "Server unreachable. Check the URL or command."
+
+
+def test_bare_launcher_resolves_to_the_installed_path(monkeypatch) -> None:
+    """The spawn must receive the resolved path, not the typed name."""
+    monkeypatch.setattr(
+        "services.mcp.shutil.which",
+        lambda _cmd: r"C:\Program Files\nodejs\npx.CMD",
+    )
+    server = MCPServerConfig(name="t", transport="stdio", command="npx", args=["-y", "pkg"])
+    params = build_server_params(server, is_mobile=False)
+    assert params.command == r"C:\Program Files\nodejs\npx.CMD"
+    assert params.args == ["-y", "pkg"]
+
+
+def test_stdio_target_splits_a_pasted_command_line() -> None:
+    """One-line entry, the way every MCP README writes it."""
+    from services.mcp import split_stdio_command
+
+    cmd, args = split_stdio_command("npx -y @modelcontextprotocol/server-everything")
+    assert cmd == "npx"
+    assert args == ["-y", "@modelcontextprotocol/server-everything"]
+
+    cmd, args = split_stdio_command("uvx mcp-server-fetch")
+    assert (cmd, args) == ("uvx", ["mcp-server-fetch"])
+
+    # A quoted Windows path keeps its backslashes and spaces.
+    cmd, args = split_stdio_command(r'"C:\Program Files\nodejs\npx.CMD" -y pkg')
+    assert cmd == r"C:\Program Files\nodejs\npx.CMD"
+    assert args == ["-y", "pkg"]
+
+    # A bare path stays untouched (non-posix split: no backslash eating).
+    cmd, args = split_stdio_command(r"C:\tools\my-server.exe")
+    assert (cmd, args) == (r"C:\tools\my-server.exe", [])
+
+
+def test_stdio_target_rejects_empty_and_unbalanced_input() -> None:
+    from services.mcp import split_stdio_command
+
+    with pytest.raises(ValueError, match="example"):
+        split_stdio_command("   ")
+    with pytest.raises(ValueError, match="unbalanced"):
+        split_stdio_command('npx "pkg')
+
+
+@pytest.mark.anyio
+async def test_fast_cancel_connect_reports_instead_of_killing_the_owner(monkeypatch) -> None:
+    """A DNS typo unwinds as a raw anyio cancel; the owner must survive.
+
+    Fast handshake failures reach _connect as `CancelledError:
+    'Cancelled via cancel scope ...'` with task.cancelling() bumped (the
+    broken unwind skips anyio's uncancel). Treating that as portal teardown
+    re-raised it, killed the owner task, and took MCP down for the session.
+    """
+    import asyncio
+
+    from services import mcp as mcp_mod
+
+    class _CancelledContext:
+        async def __aenter__(self):
+            raise asyncio.CancelledError("Cancelled via cancel scope deadbeef")
+
+        async def __aexit__(self, *exc):
+            return None
+
+    monkeypatch.setattr(
+        mcp_mod,
+        "tools_from_mcp_servers",
+        lambda *a, **k: _CancelledContext(),
+    )
+    settings = AppSettings(
+        mcp_servers=[
+            MCPServerConfig(
+                name="typo", transport="streamable_http", url="https://nope.invalid/mcp"
+            )
+        ],
+    )
+    statuses: list = []
+    hub = MCPHub(settings, on_status=lambda names, err: statuses.append((names, err)))
+    try:
+        await hub._connect()  # must NOT raise
+        assert hub.generation >= 1, "connect did not complete"
+        errors = [err for _names, err in statuses if err]
+        assert errors, statuses
+        # The user is told what to fix, not shown cancel noise.
+        assert any("URL" in err for err in errors), errors
+    finally:
+        await hub._close_owned()
+
+
+@pytest.mark.anyio
+async def test_handshake_cancel_becomes_an_actionable_test_error(monkeypatch) -> None:
+    """The Settings test button must read 'unreachable', not raw cancel noise."""
+    import asyncio
+
+    def _cancelled(_params, **_kwargs):
+        class _Ctx:
+            async def __aenter__(self):
+                raise asyncio.CancelledError("Cancelled via cancel scope 123")
+
+            async def __aexit__(self, *exc):
+                return None
+
+        return _Ctx()
+
+    monkeypatch.setattr("services.mcp.tools_from_mcp_servers", _cancelled)
+    hub = MCPHub(AppSettings())
+    server = MCPServerConfig(name="remote", transport="streamable_http", url="https://x.test/mcp")
+    with pytest.raises(MCPError) as exc:
+        await hub.test(server)
+    assert exc.value.kind == "unreachable"
+    assert "URL" in str(exc.value)
+
+
+@pytest.mark.anyio
+async def test_untagged_cancellation_still_propagates(monkeypatch) -> None:
+    """A real teardown/timeout cancel is untagged and must pass through."""
+    import asyncio
+
+    def _cancelled(_params, **_kwargs):
+        class _Ctx:
+            async def __aenter__(self):
+                raise asyncio.CancelledError()  # no anyio tag: external cancel
+
+            async def __aexit__(self, *exc):
+                return None
+
+        return _Ctx()
+
+    monkeypatch.setattr("services.mcp.tools_from_mcp_servers", _cancelled)
+    hub = MCPHub(AppSettings())
+    server = MCPServerConfig(name="remote", transport="streamable_http", url="https://x.test/mcp")
+    with pytest.raises(asyncio.CancelledError):
+        await hub.test(server)
+
+
+def test_build_passes_the_full_sdk_surface() -> None:
+    """Our UI must not be the layer that limits a server configuration:
+    env and cwd (stdio) and both remote timeouts are the SDK's own fields
+    and must reach it intact."""
+    import os
+    from datetime import timedelta
+
+    stdio = MCPServerConfig(
+        name="s",
+        transport="stdio",
+        command="npx",
+        args=["-y", "pkg"],
+        env={"API_KEY": "secret"},
+        cwd=r"C:\work",
+    )
+    params = build_server_params(stdio, is_mobile=False)
+    assert params.args == ["-y", "pkg"]
+    assert params.env is not None, "env must reach the SDK, not be dropped"
+    assert params.env["API_KEY"] == "secret"
+    # The SDK's safe whitelist must survive the merge, or the launcher
+    # itself stops resolving (no PATH for the child).
+    if os.environ.get("PATH"):
+        assert params.env.get("PATH"), "PATH must survive the env merge"
+    assert params.cwd == r"C:\work"
+
+    http = MCPServerConfig(
+        name="h",
+        transport="streamable_http",
+        url="https://x.test/mcp",
+        timeout=12.5,
+        sse_read_timeout=99.0,
+    )
+    http_params = build_server_params(http)
+    assert http_params.timeout == timedelta(seconds=12.5)
+    assert http_params.sse_read_timeout == timedelta(seconds=99.0)
+
+    sse = MCPServerConfig(name="q", transport="sse", url="https://x.test/sse", timeout=7)
+    sse_params = build_server_params(sse)
+    assert sse_params.timeout == 7  # SSE timeouts are plain seconds
+    assert sse_params.sse_read_timeout == 300  # untouched: SDK default stands
+
+
+def test_timeouts_must_be_positive() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="positive"):
+        MCPServerConfig(name="x", transport="sse", url="https://x.test/sse", timeout=0)
+    with pytest.raises(ValidationError, match="positive"):
+        MCPServerConfig(
+            name="y",
+            transport="streamable_http",
+            url="https://x.test/mcp",
+            sse_read_timeout=-1,
+        )

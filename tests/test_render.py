@@ -426,12 +426,13 @@ def test_server_screen_status_words_are_honest(_renderer_page) -> None:
         ) = saved
 
 
-def test_server_header_exposes_the_activity_log_and_notice_keeps_remedy(
+def test_server_header_exposes_the_activity_log_and_notice_is_not_a_banner(
     _renderer_page,
 ) -> None:
     """The log-terminal dialog existed with ZERO callers while three notices
-    told users to 'See logs.'; the shell banner must also keep enough lines
-    to show the remedy, not just the diagnosis."""
+    told users to 'See logs.'. The old top-of-header notice bar duplicated
+    every message (banner plus snack) and stayed until dismissed; notices
+    are SnackBars only now, so NO shell control may carry the notice text."""
     from app_shell import AppShell
     from core.state import state
     from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
@@ -460,8 +461,7 @@ def test_server_header_exposes_the_activity_log_and_notice_keeps_remedy(
             for node in _walk_all(root)
             if isinstance(node, ft.Text) and getattr(node, "value", None) == state.notice
         ]
-        assert notice_texts, "the notice banner must render"
-        assert notice_texts[0].max_lines == 5, "the remedy line was being ellipsised away"
+        assert not notice_texts, "the top notice banner must not come back"
     finally:
         root._detach_observable_subscriptions()
         root._state.mounted = False
@@ -893,6 +893,33 @@ def test_decimal_fields_use_a_typable_keypad(_renderer_page) -> None:
     assert source.count("decimal=True") == 4, (
         "Top P / Presence / Frequency must all use the typable keypad"
     )
+
+
+def test_mcp_add_form_exposes_the_full_sdk_surface() -> None:
+    """The owner's rule: the UI must never be the layer that limits what a
+    server can configure. The SDK's own fields (env, cwd, both remote
+    timeouts) must all be offerable by the add form. It sits behind the
+    +Add toggle (fresh renders start collapsed), so pin the rows and their
+    payload wiring from source; the model->SDK pass-through itself is
+    covered in test_mcp_service."""
+    from pathlib import Path as _Path
+
+    source = (
+        _Path(__file__).resolve().parents[1] / "src" / "screens" / "settings_screen.py"
+    ).read_text(encoding="utf-8")
+
+    # stdio rows: environment and working directory
+    assert 'label="Environment JSON (optional)"' in source
+    assert 'label="Working directory (optional)"' in source
+    # remote rows: both SDK timeouts
+    assert 'label="Request timeout seconds (optional)"' in source
+    assert 'label="SSE read timeout seconds (optional)"' in source
+    # and each value actually reaches the payload (not decorative fields)
+    assert 'payload["env"] = ' in source
+    assert 'payload["cwd"] = ' in source
+    assert "payload[key] = seconds" in source
+    # arguments from a pasted command line, not an empty list
+    assert 'payload["args"] = []' not in source
 
 
 def test_router_guide_switch_renders(_renderer_page) -> None:

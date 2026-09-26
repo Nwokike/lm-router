@@ -11,6 +11,7 @@ projection: printing it never leaks a source name or gateway token.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
 import httpx
@@ -116,6 +117,16 @@ def text_of(payload: object) -> str:
             return "".join(parts)
     except Exception:
         return ""
+    # Reference fallback (test-all-models textOf): any other non-empty JSON
+    # body counts as content. SystemOne replies match none of the shapes
+    # above, so without this every systemone probe read as EMPTY and models
+    # like Jev showed "failed" on a perfectly healthy 200. An EMPTY dict
+    # stays EMPTY: there is genuinely nothing there.
+    if payload:
+        try:
+            return json.dumps(payload, separators=(",", ":"))[:200]
+        except Exception:
+            return ""
     return ""
 
 
@@ -149,8 +160,19 @@ async def test_model(
     ms = int((time.monotonic() - started) * 1000)
     text = text_of(payload)
     verdict = classify(status, text, transport_error=bool(failure) and status is None)
+    # A 200 carrying an error body is not a successful reply (better than
+    # the reference, which would stringify it into an OK).
+    error_message = ""
+    if isinstance(payload, dict) and payload.get("error"):
+        err = payload["error"]
+        if isinstance(err, dict):
+            error_message = str(err.get("message") or "")[:100]
+        else:
+            error_message = str(err)[:100]
+    if status == 200 and error_message:
+        verdict = FAIL
     snippet = (
-        text.strip().replace(chr(10), " ")[:80]
+        (error_message or text.strip().replace(chr(10), " "))[:80]
         or failure
         or (f"HTTP {status}" if status is not None else "")
     )

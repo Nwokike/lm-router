@@ -12,6 +12,7 @@ from core.logging import LOG
 from core.notify import show_snack
 from core.settings import AppSettings
 from core.state import AppStateCtx
+from services.mcp import split_stdio_command
 from state.controller_ctx import ControllerMethodsCtx
 
 
@@ -63,6 +64,10 @@ def SettingsScreen():
     router_help, set_router_help = ft.use_state(settings.router_help)
     m_target, set_m_target = ft.use_state("")
     m_headers, set_m_headers = ft.use_state("")
+    m_env, set_m_env = ft.use_state("")
+    m_cwd, set_m_cwd = ft.use_state("")
+    m_timeout, set_m_timeout = ft.use_state("")
+    m_sse_to, set_m_sse_to = ft.use_state("")
 
     def _section(title: str, rows: list) -> list[ft.Control]:
         """Uppercase label above a bordered card, Sherlock's layout."""
@@ -261,14 +266,51 @@ def SettingsScreen():
             "headers": headers,
         }
         if m_transport == "stdio":
-            payload["command"] = target
-            payload["args"] = []
+            # One pasted command line, as every MCP README writes it:
+            # `npx -y <package>`. The whole line used to land in `command`
+            # with empty args, so nothing with arguments could ever start.
+            try:
+                command, args = split_stdio_command(target)
+            except ValueError as exc:
+                show_snack(page, str(exc))
+                return
+            payload["command"] = command
+            payload["args"] = args
+            if m_env.strip():
+                try:
+                    parsed_env = json.loads(m_env)
+                    if not isinstance(parsed_env, dict):
+                        raise ValueError("not an object")
+                    payload["env"] = {str(k): str(v) for k, v in parsed_env.items()}
+                except ValueError:
+                    show_snack(page, "Environment must be a JSON object.")
+                    return
+            if m_cwd.strip():
+                payload["cwd"] = m_cwd.strip()
         else:
             url = target if "://" in target else f"https://{target}"
             payload["url"] = url
+            for raw, key, label in (
+                (m_timeout, "timeout", "Request timeout"),
+                (m_sse_to, "sse_read_timeout", "SSE read timeout"),
+            ):
+                if not raw.strip():
+                    continue
+                try:
+                    seconds = float(raw.strip())
+                    if seconds <= 0:
+                        raise ValueError
+                except ValueError:
+                    show_snack(page, f"{label} must be a positive number of seconds.")
+                    return
+                payload[key] = seconds
         methods.add_mcp_server(payload)
         set_m_name("")
         set_m_target("")
+        set_m_env("")
+        set_m_cwd("")
+        set_m_timeout("")
+        set_m_sse_to("")
         set_m_headers("")
         set_mcp_open(False)
         show_snack(page, "MCP server added.")
@@ -929,6 +971,11 @@ def SettingsScreen():
                 _pad(
                     ft.TextField(
                         label="Command (stdio) or URL (remote)",
+                        hint_text=(
+                            "e.g. npx -y @modelcontextprotocol/server-everything"
+                            if m_transport == "stdio"
+                            else "https://server.example.com/mcp"
+                        ),
                         value=m_target,
                         text_size=tokens.FONT_BODY_SM,
                         on_change=lambda e: set_m_target(str(e.control.value or "")),
@@ -941,6 +988,55 @@ def SettingsScreen():
                         text_size=tokens.FONT_BODY_SM,
                         on_change=lambda e: set_m_headers(str(e.control.value or "")),
                     ),
+                ),
+                # The SDK supports env/cwd for stdio and HTTP/SSE timeouts
+                # for remote servers; the form exposes all of it so our UI
+                # is never the layer that limits what a server can configure.
+                *(
+                    [
+                        _pad(
+                            ft.TextField(
+                                label="Environment JSON (optional)",
+                                hint_text='extra variables for the server, e.g. {"API_KEY": "..."}',
+                                value=m_env,
+                                text_size=tokens.FONT_BODY_SM,
+                                on_change=lambda e: set_m_env(str(e.control.value or "")),
+                            ),
+                        ),
+                        _pad(
+                            ft.TextField(
+                                label="Working directory (optional)",
+                                hint_text="where the server runs; defaults to the app's",
+                                value=m_cwd,
+                                text_size=tokens.FONT_BODY_SM,
+                                on_change=lambda e: set_m_cwd(str(e.control.value or "")),
+                            ),
+                        ),
+                    ]
+                    if m_transport == "stdio"
+                    else [
+                        _pad(
+                            ft.TextField(
+                                label="Request timeout seconds (optional)",
+                                hint_text="default 30 for streamable, 5 for sse",
+                                value=m_timeout,
+                                text_size=tokens.FONT_BODY_SM,
+                                # Decimal-safe: Android's NUMBER keypad has no dot.
+                                keyboard_type=ft.KeyboardType.TEXT,
+                                on_change=lambda e: set_m_timeout(str(e.control.value or "")),
+                            ),
+                        ),
+                        _pad(
+                            ft.TextField(
+                                label="SSE read timeout seconds (optional)",
+                                hint_text="how long to wait for stream data; default 300",
+                                value=m_sse_to,
+                                text_size=tokens.FONT_BODY_SM,
+                                keyboard_type=ft.KeyboardType.TEXT,
+                                on_change=lambda e: set_m_sse_to(str(e.control.value or "")),
+                            ),
+                        ),
+                    ]
                 ),
                 _pad(
                     ft.Row(

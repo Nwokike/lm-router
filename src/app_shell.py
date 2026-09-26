@@ -6,6 +6,7 @@ import flet as ft
 
 from components.app_header import AppHeader
 from core import tokens
+from core.notify import show_snack
 from core.state import AppStateCtx
 from screens.chat_screen import ChatScreen
 from screens.history_screen import HistoryScreen
@@ -78,6 +79,20 @@ def AppShell():
         [state.selected_tab, state.onboarding_done],
     )
 
+    def _surface_boot_notice() -> None:
+        # state.notice carries one-time boot warnings (dropped provider
+        # keys, malformed stored items). The old top-of-header banner is
+        # gone: notices surface as SnackBars (scroll-independent,
+        # Sherlock's pattern), shown once after the first frame, then
+        # cleared so the effect never loops.
+        if not state.notice:
+            return
+        page = getattr(ft.context, "page", None)
+        show_snack(page, state.notice, duration=10000)
+        methods.dismiss_notice()
+
+    ft.use_effect(_surface_boot_notice, [state.notice])
+
     if not state.onboarding_done:
         return ft.SafeArea(
             expand=True,
@@ -106,40 +121,6 @@ def AppShell():
             ),
         )
         if state.offline
-        else ft.Container(height=0)
-    )
-
-    notice_banner = (
-        ft.Container(
-            padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, tokens.SPACE_SM),
-            bgcolor=ft.Colors.with_opacity(tokens.OPACITY_STRONG, ft.Colors.ERROR),
-            content=ft.Row(
-                spacing=tokens.SPACE_SM,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                controls=[
-                    ft.Icon(
-                        ft.Icons.ERROR_OUTLINE_ROUNDED,
-                        size=tokens.ICON_XS,
-                        color=ft.Colors.ERROR,
-                    ),
-                    ft.Text(
-                        state.notice,
-                        size=tokens.FONT_SM,
-                        color=ft.Colors.ERROR,
-                        max_lines=5,
-                        overflow=ft.TextOverflow.ELLIPSIS,
-                        expand=True,
-                    ),
-                    ft.IconButton(
-                        ft.Icons.CLOSE,
-                        icon_size=tokens.ICON_XS,
-                        tooltip="Dismiss",
-                        on_click=lambda _: methods.dismiss_notice(),
-                    ),
-                ],
-            ),
-        )
-        if state.notice
         else ft.Container(height=0)
     )
 
@@ -210,7 +191,6 @@ def AppShell():
             spacing=0,
             controls=[
                 offline_banner,
-                notice_banner,
                 ft.Container(expand=True, content=views[index]),
             ],
         ),

@@ -62,7 +62,11 @@ def test_text_of_extraction_order() -> None:
         model_bench.text_of({"output": [{"type": "t", "text": "x"}, {"content": [{"text": "y"}]}]})
         == "xy"
     )
-    assert model_bench.text_of({"weird": 1}) == ""
+    # Unknown-but-real JSON bodies surface as a snippet (the reference's
+    # final fallback — the Jev/SystemOne fix); a genuinely empty body is not
+    # content, and a non-dict never is.
+    assert model_bench.text_of({"weird": 1}) == '{"weird":1}'
+    assert model_bench.text_of({}) == ""
     assert model_bench.text_of("not a dict") == ""
 
 
@@ -184,3 +188,52 @@ async def test_retest_is_serial_progressive_and_stoppable(sleeps) -> None:
         stop_event=stop,
     )
     assert len(results) == 2, "Stop takes effect after the current probe"
+
+
+@pytest.mark.anyio
+async def test_systemone_shaped_replies_read_as_ok() -> None:
+    """The Jev regression: a healthy SystemOne reply matches NONE of the
+    chat/responses shapes, so without the reference's JSON fallback it read
+    as EMPTY and the row showed 'failed' on a perfect 200."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/v1/models"):
+            return httpx.Response(
+                200, json={"data": [{"id": "jev-1", "endpoint_type": "systemone"}]}
+            )
+        return httpx.Response(
+            200,
+            json={"state": "ok", "questions": {"test": {"answer": "OK"}}},
+        )
+
+    service = _service(handler)
+    result = await model_bench.test_model(service, "http://gw/v1", "jev-1", "systemone")
+    assert result["verdict"] == "OK", result
+    assert "questions" in result["snippet"], "the JSON snippet must surface"
+
+
+@pytest.mark.anyio
+async def test_error_body_on_200_is_a_failure() -> None:
+    """A 200 carrying {'error': ...} is not a success — the reference would
+    stringify it into OK; we report it honestly."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"error": {"message": "model not found"}})
+
+    service = _service(handler)
+    result = await model_bench.test_model(service, "http://gw/v1", "m", "chat.completion")
+    assert result["verdict"] == "FAIL", result
+    assert "model not found" in result["snippet"], result
+
+
+@pytest.mark.anyio
+async def test_known_shape_with_empty_content_stays_empty() -> None:
+    """The JSON fallback must not hijack the EMPTY verdict for chat replies
+    whose content is present but blank."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": [{"message": {"content": ""}}]})
+
+    service = _service(handler)
+    result = await model_bench.test_model(service, "http://gw/v1", "m", "chat.completion")
+    assert result["verdict"] == "EMPTY", result

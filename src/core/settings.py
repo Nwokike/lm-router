@@ -62,6 +62,14 @@ class MCPServerConfig(BaseModel):
     args: list[str] = []
     url: AnyUrl | None = None
     headers: dict[str, str] = {}
+    # The full SDK surface, not a subset: stdio servers may need extra
+    # environment variables (API keys) and a working directory; remote
+    # servers may tune the HTTP and SSE-read timeouts. The form decides
+    # which of these a payload carries per transport.
+    env: dict[str, str] = {}
+    cwd: str | None = None
+    timeout: float | None = None
+    sse_read_timeout: float | None = None
     disabled_tools: list[str] = Field(default_factory=list)
     enabled: bool = True
 
@@ -71,6 +79,14 @@ class MCPServerConfig(BaseModel):
             raise ValueError("stdio servers need a command")
         if self.transport != "stdio" and not self.url:
             raise ValueError("remote servers need a url")
+        if self.transport != "stdio" and not str(self.url).lower().startswith(
+            ("http://", "https://")
+        ):
+            raise ValueError("remote urls must start with http:// or https://")
+        if self.timeout is not None and self.timeout <= 0:
+            raise ValueError("timeout must be a positive number of seconds")
+        if self.sse_read_timeout is not None and self.sse_read_timeout <= 0:
+            raise ValueError("sse read timeout must be a positive number of seconds")
         return self
 
 

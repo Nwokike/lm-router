@@ -940,6 +940,7 @@ def test_router_guide_and_tools_wire_into_the_agent(boot_page) -> None:
     prompt = controller._system_prompt()
     assert "OpenAI-compatible gateway" in prompt, "guide missing from the prompt"
     assert "rate limited" in prompt, "status vocabulary must be taught"
+    assert "web_search" in prompt, "the research-first rule must name the tool"
 
     # The switch really removes it.
     controller.methods.save_settings({"router_help": False})

@@ -341,17 +341,15 @@ class AppController:
         return run
 
     def _notify_error(self, message: str) -> None:
-        """Surface a failure as a banner AND a scroll-independent snack.
+        """Surface a failure as a scroll-independent SnackBar.
 
-        The banner alone is invisible whenever the shell is scrolled away:
-        during onboarding, mid-conversation, or on another tab. The snack is
-        an overlay, so the message is always seen. Never swallow.
+        The old top-of-header banner duplicated every message (banner plus
+        snack) and sat there until dismissed; notices are SnackBars only
+        now (Sherlock's pattern). Never swallow.
         """
 
         def _apply() -> None:
-            state.notice = message
-            with contextlib.suppress(Exception):
-                show_snack(self.page, message, bgcolor=theme.ERROR, duration=6000)
+            show_snack(self.page, message, bgcolor=theme.ERROR, duration=6000)
 
         LOG.warning("notice: %s", message)
         self._run_on_ui(_apply)()
@@ -360,39 +358,17 @@ class AppController:
         state.notice = ""
 
     def _notify_info(self, message: str) -> None:
-        """Non-error feedback (floating SnackBar); falls back to the banner.
+        """Non-error feedback as a floating SnackBar.
 
-        A second info message within 2.5s used to hit the "Dialog is already
-        opened" RuntimeError and drop into the banner, which can be off-screen.
-        Use the same replace-a-lingering-snack dance as core/notify.py.
+        show_snack already replaces a lingering SnackBar (the "Dialog is
+        already opened" RuntimeError), so the hand-rolled dance here was
+        duplicate code; its only unique behavior, FLOATING, moved into
+        show_snack as a parameter.
         """
         LOG.info("notice: %s", message)
 
         def _apply() -> None:
-            def _show() -> None:
-                self.page.show_dialog(
-                    ft.SnackBar(
-                        content=ft.Text(message, color=ft.Colors.WHITE),
-                        behavior=ft.SnackBarBehavior.FLOATING,
-                        duration=2500,
-                    ),
-                )
-
-            def _fallback(exc: Exception) -> None:
-                LOG.warning("info snack failed: %s", exc)
-                state.notice = message
-
-            try:
-                _show()
-            except RuntimeError:
-                popped = self.page.pop_dialog()
-                if popped is None or isinstance(popped, ft.SnackBar):
-                    try:
-                        _show()
-                    except Exception as exc:
-                        _fallback(exc)
-            except Exception as exc:
-                _fallback(exc)
+            show_snack(self.page, message, duration=2500, floating=True)
 
         self._run_on_ui(_apply)()
 

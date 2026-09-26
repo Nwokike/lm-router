@@ -132,6 +132,21 @@ def test_page_chrome_zeroed_and_nav_is_view_chrome() -> None:
     assert theme.count("navigation_bar_theme") == 2, "both themes need NavigationBarTheme"
 
 
+def test_notices_are_snacks_not_banners() -> None:
+    shell = _read("app_shell.py")
+    main = _read("main.py")
+
+    # The old top-of-header notice bar duplicated every message (banner
+    # plus snack) and sat there until dismissed with the X; notices are
+    # SnackBars only now (scroll-independent, Sherlock's pattern).
+    assert "notice_banner" not in shell, "the top notice banner is back"
+    # Boot warnings (dropped provider keys, malformed stored items) still
+    # surface: once, as a SnackBar, after the first frame.
+    assert "show_snack" in shell, "boot notices must convert to a SnackBar"
+    # Producers must never refill the removed banner.
+    assert "state.notice = message" not in main, "a producer is refilling the banner"
+
+
 def test_header_carries_sherlock_values() -> None:
     header = _squish(_read("components/app_header.py"))
     # Sherlock AppHeader: 16/8 padding, horizontal overflow scroll,

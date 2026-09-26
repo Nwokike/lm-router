@@ -214,7 +214,10 @@ def build_search_tool(http: HttpService) -> AIFunction:
         top_k: Annotated[int, AIParam("Maximum number of results to retrieve (1-10)")] = 5,
     ) -> str:
         """Search the web and return sources with highlights. Use for current
-        events, facts you are unsure about, or anything after your training cutoff."""
+        events, facts you are unsure about, or anything after your training
+        cutoff. ALWAYS search first when you are not 100% sure about a tool,
+        product, or setup step: research rather than guess, and never assume
+        a similar-sounding name is the thing the user meant."""
         # Do NOT swallow failures into a friendly-sounding string: kani turns a
         # raised exception into a tool result with is_tool_call_error=True,
         # which renders as a visible error card in chat (audit D).
