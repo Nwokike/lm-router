@@ -681,3 +681,110 @@ def test_catalog_header_drives_the_bench(_renderer_page) -> None:
         root._detach_observable_subscriptions()
         root._state.mounted = False
         state.gateway_running, state.models, state.retesting, state.retest_progress = saved
+
+
+def test_connection_snippets_render_and_copy(_renderer_page) -> None:
+    """Console parity: paste-ready snippets for any OpenAI-compatible tool,
+    cURL and Python — built ONLY from strings the API itself returns, and
+    available even while the gateway is down (they are setup instructions)."""
+    from core.state import state
+    from screens.server_screen import ServerScreen
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    saved = (
+        state.gateway_running,
+        state.models,
+        state.gateway_port,
+        state.gateway_base_url,
+    )
+    state.gateway_running = True
+    state.gateway_port = 8082
+    state.gateway_base_url = "http://127.0.0.1:8082/v1"
+    state.models = [{"id": "auto", "status": "active"}]
+
+    copied: list[str] = []
+    methods = ControllerMethods()
+    methods.copy_text = lambda text: copied.append(text)
+    try:
+        root = _render(lambda: ControllerMethodsCtx(methods, ServerScreen))
+        texts = [
+            str(getattr(node, "value", node if isinstance(node, str) else ""))
+            for node in _walk_all(root)
+        ]
+        blob = " ".join(t for t in texts if t)
+        assert "Connect a tool" in blob
+        assert "Base URL: http://127.0.0.1:8082/v1" in blob
+        assert "API Key: any string" in blob
+        assert "Model: auto" in blob
+        assert "curl -X POST" in blob and "-H" in blob, "the curl snippet needs -H"
+        assert "from openai import OpenAI" in blob
+
+        # The copy button hands the WHOLE snippet to the clipboard helper.
+        copy_buttons = [
+            node
+            for node in _walk_all(root)
+            if isinstance(node, ft.IconButton) and node.tooltip == "Copy cURL"
+        ]
+        assert copy_buttons, "each snippet needs a copy button"
+        copy_buttons[0].on_click(None)
+        assert copied and "-H" in copied[0] and '"model"' in copied[0], copied
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.gateway_running, state.models, state.gateway_port, state.gateway_base_url = saved
+
+    # Offline: the snippets are the setup guide, so they stay visible.
+    state.gateway_running = False
+    state.models = []
+    try:
+        root = _render(lambda: ControllerMethodsCtx(ControllerMethods(), ServerScreen))
+        blob = " ".join(
+            str(getattr(node, "value", node if isinstance(node, str) else ""))
+            for node in _walk_all(root)
+        )
+        assert "Connect a tool" in blob, "snippets must render while offline"
+        assert "Model: auto" in blob, "falls back to auto with an empty catalog"
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.gateway_running, state.models, state.gateway_port, state.gateway_base_url = saved
+
+
+def test_endpoint_reference_starts_collapsed(_renderer_page) -> None:
+    """The endpoint table is a lookup: collapsed by default, and its header
+    toggles without raising (the open branch renders the full local-console
+    table)."""
+    from core.state import state
+    from screens.server_screen import ServerScreen
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    saved = state.gateway_running
+    state.gateway_running = True
+    try:
+        root = _render(lambda: ControllerMethodsCtx(ControllerMethods(), ServerScreen))
+        texts = {
+            getattr(node, "value", None)
+            for node in _walk_all(root)
+            if isinstance(node, ft.Text) and getattr(node, "value", None)
+        }
+        assert "Endpoints" in texts, "the reference header must show"
+        assert "/v1/chat/completions" not in texts, "collapsed by default"
+        assert "Counts only, no names" not in texts
+
+        # The card's header toggles the open state (no crash on fire).
+        toggles = [
+            node
+            for node in _walk_all(root)
+            if isinstance(node, ft.Container)
+            and node.on_click is not None
+            and any(
+                isinstance(inner, ft.Text) and getattr(inner, "value", None) == "Endpoints"
+                for inner in _walk_all(node)
+            )
+        ]
+        assert toggles, "the Endpoints card must be tappable"
+        toggles[0].on_click(None)
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.gateway_running = saved

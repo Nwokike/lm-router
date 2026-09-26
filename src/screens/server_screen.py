@@ -1,5 +1,7 @@
 """Server screen: gateway status, local endpoints, model catalog, live logs."""
 
+import json
+
 import flet as ft
 
 from components.banner_ad import build_banner_ad
@@ -23,6 +25,20 @@ _LEVEL_COLORS = {
 }
 
 _MAX_LOG_ROWS = 200  # ring holds 500; rendering every row per log bump janked (R9)
+
+# The local console's endpoint reference, verbatim (ui/console.html):
+# the app is the LOCAL console's sibling, so the full table (including
+# /account-limits and /systemone) is operator-facing and safe here.
+_ENDPOINT_REFERENCE = [
+    ("GET", "/", "This console"),
+    ("GET", "/health", "Status, uptime"),
+    ("GET", "/v1/models", "Model catalog (add ?refresh=true to re-probe)"),
+    ("GET", "/account-limits", "Model availability overview"),
+    ("GET", "/status", "Counts only, no names"),
+    ("POST", "/v1/chat/completions", "Chat completions with automatic routing"),
+    ("POST", "/v1/responses", "Responses API passthrough"),
+    ("POST", "/v1/systemone", "SystemOne passthrough"),
+]
 
 
 def _compact_button_style() -> ft.ButtonStyle:
@@ -93,6 +109,9 @@ def ServerScreen():
     state = ft.use_context(AppStateCtx)
     methods = ft.use_context(ControllerMethodsCtx)
     log_filter, set_log_filter = ft.use_state("ALL")
+    # Endpoint reference starts collapsed: it is a lookup table, not a
+    # dashboard.
+    api_ref_open, set_api_ref_open = ft.use_state(False)
     _ = state.log_version  # subscribe: bumping log_version re-renders this screen
     # The share-key switch writes through save_settings, which only bumps
     # settings_version. Without this read the card never re-rendered and the
@@ -326,6 +345,192 @@ def ServerScreen():
                 ],
             ),
         )
+
+    # Console-parity cards: connection snippets (paste into any tool) and the
+    # endpoint reference. Both exist in ui/console.html; snippets render even
+    # while the gateway is down because they are the SETUP instructions.
+    _api_url = state.gateway_base_url
+    _example_model = (
+        str(state.models[0].get("id") or "auto")
+        if state.models and isinstance(state.models[0], dict)
+        else "auto"
+    )
+    _curl_body = json.dumps(
+        {
+            "model": _example_model,
+            "messages": [{"role": "user", "content": "Hello!"}],
+        },
+        separators=(", ", ": "),
+    )
+    _snippets = [
+        (
+            "Any OpenAI-compatible tool",
+            "Base URL: "
+            + _api_url
+            + chr(10)
+            + "API Key: any string"
+            + chr(10)
+            + "Model: "
+            + _example_model,
+        ),
+        (
+            "cURL",
+            "curl -X POST "
+            + _api_url
+            + "/chat/completions -H "
+            + chr(34)
+            + "Content-Type: application/json"
+            + chr(34)
+            + " "
+            + "-d "
+            + chr(39)
+            + _curl_body
+            + chr(39),
+        ),
+        (
+            "Python",
+            "from openai import OpenAI"
+            + chr(10)
+            + "client = OpenAI(base_url="
+            + repr(_api_url)
+            + ", api_key="
+            + repr("any")
+            + ")"
+            + chr(10)
+            + "response = client.chat.completions.create("
+            + chr(10)
+            + "    model="
+            + repr(_example_model)
+            + ","
+            + chr(10)
+            + "    messages=[{"
+            + repr("role")
+            + ": "
+            + repr("user")
+            + ", "
+            + repr("content")
+            + ": "
+            + repr("Hello!")
+            + "}],"
+            + chr(10)
+            + ")"
+            + chr(10)
+            + "print(response.choices[0].message.content)",
+        ),
+    ]
+
+    def _snippet_card() -> ft.Container:
+        rows: list[ft.Control] = []
+        for title, snippet in _snippets:
+            rows.append(
+                ft.Column(
+                    spacing=tokens.SPACE_XXS,
+                    tight=True,
+                    controls=[
+                        ft.Row(
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            controls=[
+                                ft.Text(
+                                    title,
+                                    size=tokens.FONT_XS,
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                                ft.IconButton(
+                                    ft.Icons.CONTENT_COPY_ROUNDED,
+                                    icon_size=tokens.ICON_XS,
+                                    tooltip=f"Copy {title}",
+                                    on_click=lambda _e, s=snippet: methods.copy_text(s),
+                                ),
+                            ],
+                        ),
+                        ft.Text(
+                            snippet,
+                            size=tokens.FONT_2XS,
+                            font_family="monospace",
+                            color=theme.dim(is_dark),
+                            selectable=True,
+                        ),
+                    ],
+                ),
+            )
+        return ft.Container(
+            padding=ft.Padding.symmetric(
+                horizontal=tokens.SPACE_MD,
+                vertical=tokens.SPACE_SNUG,
+            ),
+            border_radius=tokens.RADIUS_MD,
+            bgcolor=theme.surface_2(is_dark),
+            border=ft.Border.all(1, theme.border(is_dark)),
+            content=ft.Column(
+                spacing=tokens.SPACE_SM,
+                tight=True,
+                controls=[
+                    ft.Text(
+                        "Connect a tool",
+                        size=tokens.FONT_MD,
+                        weight=ft.FontWeight.W_600,
+                    ),
+                    *rows,
+                ],
+            ),
+        )
+
+    def _api_ref_card() -> ft.Container:
+        chevron = ft.Icons.EXPAND_LESS_ROUNDED if api_ref_open else ft.Icons.EXPAND_MORE_ROUNDED
+        rows: list[ft.Control] = [
+            ft.Row(
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Text(
+                        "Endpoints",
+                        size=tokens.FONT_MD,
+                        weight=ft.FontWeight.W_600,
+                    ),
+                    ft.Icon(
+                        chevron,
+                        size=tokens.ICON_SM,
+                        color=theme.dim(is_dark),
+                    ),
+                ],
+            ),
+        ]
+        if api_ref_open:
+            for method, path, description in _ENDPOINT_REFERENCE:
+                rows.append(
+                    ft.Row(
+                        spacing=tokens.SPACE_SM,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        controls=[
+                            ft.Text(
+                                f"{method} {path}",
+                                size=tokens.FONT_2XS,
+                                font_family="monospace",
+                                color=theme.PRIMARY,
+                            ),
+                            ft.Text(
+                                description,
+                                size=tokens.FONT_2XS,
+                                color=theme.dim(is_dark),
+                            ),
+                        ],
+                    ),
+                )
+        return ft.Container(
+            padding=ft.Padding.symmetric(
+                horizontal=tokens.SPACE_MD,
+                vertical=tokens.SPACE_SNUG,
+            ),
+            border_radius=tokens.RADIUS_MD,
+            bgcolor=theme.surface_2(is_dark),
+            border=ft.Border.all(1, theme.border(is_dark)),
+            on_click=lambda _: set_api_ref_open(not api_ref_open),
+            content=ft.Column(spacing=tokens.SPACE_SM, tight=True, controls=rows),
+        )
+
+    snippets_card = _snippet_card()
+    api_ref_card = _api_ref_card()
 
     # Share card: publish this device's gateway. The key is OPTIONAL by
     # design; when on, our stdlib proxy enforces it, because the router itself
@@ -921,6 +1126,8 @@ def ServerScreen():
             ),
             *([conn_card] if conn_card is not None else []),
             *([share_card] if share_card is not None else []),
+            snippets_card,
+            api_ref_card,
             # Owner: banner after the share gateway, before the model
             # catalog, then one more between the catalog and the logs. None
             # after the logs.
