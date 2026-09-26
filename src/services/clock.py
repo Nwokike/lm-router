@@ -19,9 +19,6 @@ from typing import Annotated
 from kani import AIParam
 from kani.ai_function import AIFunction
 
-# Used when the device clock has no timezone information (common on Windows).
-_LOCAL_TZ = None
-
 
 def now() -> datetime:
     try:

@@ -444,12 +444,8 @@ def ChatScreen():
     # "Internet" = hosted web search; "MCP" opens the per-tool switch dialog.
     composer = Composer(
         busy=state.busy,
-        search_enabled=state.search_enabled,
-        mcp_count=len(state.mcp_tools),
         on_send=methods.send_message,
         on_stop=methods.stop_generation,
-        on_toggle_search=methods.toggle_search_tool,
-        on_open_mcp=methods.open_mcp_tools,
     )
 
     return ft.Column(

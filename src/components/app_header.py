@@ -22,9 +22,6 @@ def _theme_icon(mode: str) -> object:
 def AppHeader(
     *,
     title: str | None = None,
-    subtitle: str | None = None,
-    show_settings: bool = False,
-    on_settings: object | None = None,
     show_quit: bool = False,
     extra_actions: list | None = None,
 ) -> ft.Container:
@@ -60,15 +57,6 @@ def AppHeader(
                 font_family=theme.FONT,
             ),
         ]
-        if subtitle:
-            title_controls.append(
-                ft.Text(
-                    subtitle,
-                    size=tokens.FONT_XS,
-                    color=ft.Colors.ON_SURFACE_VARIANT,
-                    font_family=theme.FONT,
-                ),
-            )
         left.append(ft.Column(controls=title_controls, spacing=tokens.SPACE_XXS, tight=True))
 
     right: list = list(extra_actions or [])
@@ -142,15 +130,6 @@ def AppHeader(
             tooltip="Theme: light / dark / system",
         ),
     )
-    if show_settings and on_settings is not None:
-        right.append(
-            ft.IconButton(
-                icon=ft.Icons.SETTINGS_ROUNDED,
-                icon_size=tokens.ICON_SM + 2,
-                on_click=on_settings,
-                tooltip="Settings",
-            ),
-        )
     if show_quit:
         # Always-present escape hatch: without it, "keep running when closed"
         # means the app looks like it refuses to quit.

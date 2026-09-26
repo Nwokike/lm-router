@@ -3,17 +3,12 @@ defaults, containers assigned in __init__ so each instance owns them)."""
 
 import flet as ft
 
-# Screens historically imported the eligibility predicate from here; the rule
-# itself now lives in core.catalog next to the endpoint vocabulary.
-from core.catalog import is_chat_eligible
-
-__all__ = ["AppState", "AppStateCtx", "is_chat_eligible", "state"]
+__all__ = ["AppState", "AppStateCtx", "state"]
 
 
 @ft.observable
 class AppState:
     selected_tab: int = 0
-    active_view: str = "chat"
     theme_mode: str = "system"
     offline: bool = False
     onboarding_done: bool = False
@@ -46,15 +41,12 @@ class AppState:
     busy: bool = False
     search_enabled: bool = True
     context_used_tokens: int = 0
-    session_total_tokens: int = 0
-    ad_can_request: bool = False
     sent_count: int = 0
     update_info: dict | None = None
     log_version: int = 0  # bumped when the log ring changes (re-renders Server screen)
 
     # Global error/notice banner (dismissed by the user; never swallowed)
     notice: str = ""
-    notice_id: int = 0  # bumped with notice so identical texts re-render
 
     # Settings: server-ids with an in-flight "Test" (spinner + re-click guard)
     mcp_testing: frozenset = frozenset()

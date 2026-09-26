@@ -305,9 +305,3 @@ class EngineService:
             except Exception as exc:
                 # never let one bad tick kill the watchdog thread
                 LOG.warning("gateway watch tick failed: %s", exc)
-
-
-def json_loads(data: bytes) -> dict:
-    import json
-
-    return json.loads(data)

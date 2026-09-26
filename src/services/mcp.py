@@ -306,34 +306,6 @@ class MCPHub:
         self.names = []
         self.generation += 1
 
-    async def apply(self, params: list[object]) -> None:
-        """One-shot connect for tests/tooling (same task enter+exit)."""
-        await self._close_owned()
-        if not params:
-            self.generation += 1
-            return
-        blocked: list[str] = []
-        for server in self.settings.mcp_servers:
-            if server.enabled and server.disabled_tools:
-                for dt in server.disabled_tools:
-                    blocked.append(f"{server.name}.{dt}")
-        context = tools_from_mcp_servers(
-            params,
-            blocked_tools=blocked or None,
-            component_name_hook=lambda name, info: f"{info.name}.{name}",
-        )
-        tools = await context.__aenter__()
-        self._context = context
-        self.tools = list(tools)
-        self.names = [str(getattr(t, "name", "?")) for t in self.tools]
-        self.generation += 1
-        LOG.info(
-            "mcp connected: %d tools from %d servers (%d blocked)",
-            len(self.tools),
-            len(params),
-            len(blocked),
-        )
-
     async def close(self) -> None:
         await self._close_owned()
 

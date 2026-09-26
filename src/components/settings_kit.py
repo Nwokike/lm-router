@@ -9,8 +9,6 @@ overflows on a phone.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 import flet as ft
 
 from core import tokens
@@ -51,7 +49,6 @@ def setting_row(
     subtitle: str = "",
     trailing: ft.Control | None = None,
     stacked: bool = False,
-    on_tap: Callable[[], None] | None = None,
 ) -> ft.Container:
     """One settings row, Sherlock's `_setting_row`.
 
@@ -120,6 +117,4 @@ def setting_row(
             top=tokens.SPACE_MD,
             bottom=tokens.SPACE_MD,
         ),
-        on_click=on_tap,
-        ink=on_tap is not None,
     )

@@ -333,7 +333,6 @@ class AppController:
 
         def _apply() -> None:
             state.notice = message
-            state.notice_id += 1
             with contextlib.suppress(Exception):
                 show_snack(self.page, message, bgcolor=theme.ERROR, duration=6000)
 
@@ -936,7 +935,6 @@ class AppController:
             if usage:
                 entry["usage"] = usage
                 total = int(usage.get("total_tokens") or 0)
-                state.session_total_tokens += total
                 state.context_used_tokens = total
             state.messages[index] = entry
             state.busy = False

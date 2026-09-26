@@ -328,12 +328,8 @@ def SessionBar(
 def Composer(
     *,
     busy: bool,
-    search_enabled: bool,
-    mcp_count: int,
     on_send: Callable[[str], None],
     on_stop: Callable[[], None],
-    on_toggle_search: Callable[[], None],
-    on_open_mcp: Callable[[], None],
 ):
     """Message input. Draft state is local so typing never rebuilds the thread."""
     draft, set_draft = ft.use_state("")

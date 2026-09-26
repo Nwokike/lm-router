@@ -10,8 +10,6 @@ import flet as ft
 
 # Accent (the router's own brand accent).
 PRIMARY = "#6366F1"
-PRIMARY_DARK = "#4F46E5"
-ACCENT = "#0EA5E9"
 FONT = "Outfit"
 
 # Dark slate neutrals — the house palette.
@@ -93,10 +91,6 @@ def is_dark_mode(page: object, theme_mode: str) -> bool:
     # some platforms), so read it defensively. It is a Brightness enum, not a
     # ThemeMode: comparing the two was always False.
     return getattr(page, "platform_brightness", None) == ft.Brightness.DARK
-
-
-def surface(is_dark: bool) -> str:
-    return DARK_SURFACE if is_dark else LIGHT_SURFACE
 
 
 def surface_2(is_dark: bool) -> str:

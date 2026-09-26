@@ -27,5 +27,4 @@ AD_INTERSTITIAL_UNIT_ID_ANDROID = "ca-app-pub-5679949845754640/2372451777"
 
 # Keyless hosted search endpoint (same one OpenCode's own websearch tool calls).
 SEARCH_ENDPOINT = "https://mcp.exa.ai/mcp"
-SEARCH_TOOL_NAME = "web_search_exa"
 SEARCH_TIMEOUT = 25.0

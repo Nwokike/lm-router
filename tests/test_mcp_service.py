@@ -136,7 +136,11 @@ async def test_hub_test_schema_validation(monkeypatch) -> None:
 
 
 @pytest.mark.anyio
-async def test_hub_apply_passes_blocked_tools(monkeypatch) -> None:
+async def test_connect_passes_blocked_tools(monkeypatch) -> None:
+    """Per-server connect (the SHIPPED path) must pass the configured
+    server's disabled tools. The old test drove apply(), a test-only fork
+    that reintroduced all three bugs _connect was written to fix — so the
+    reconnect path stayed effectively untested."""
     passed_blocked: list = []
 
     class FakeContext:
@@ -161,10 +165,12 @@ async def test_hub_apply_passes_blocked_tools(monkeypatch) -> None:
     )
     settings = AppSettings(mcp_servers=[server])
     hub = MCPHub(settings)
-
-    await hub.apply([build_server_params(server)])
-    assert "github.delete_repo" in passed_blocked
-    assert "github.push_file" in passed_blocked
+    try:
+        await hub._connect()
+        assert "github.delete_repo" in passed_blocked
+        assert "github.push_file" in passed_blocked
+    finally:
+        await hub._close_owned()
 
 
 @pytest.mark.anyio
