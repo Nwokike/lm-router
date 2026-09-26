@@ -1125,12 +1125,13 @@ def ServerScreen():
                 ),
             ),
             *([conn_card] if conn_card is not None else []),
+            # Owner: one banner between the local gateway section and the
+            # share card, one before the model catalog, one before the logs.
+            # None after the logs.
+            build_banner_ad(),
             *([share_card] if share_card is not None else []),
             snippets_card,
             api_ref_card,
-            # Owner: banner after the share gateway, before the model
-            # catalog, then one more between the catalog and the logs. None
-            # after the logs.
             build_banner_ad(),
             catalog_card,
             build_banner_ad(),

@@ -227,7 +227,7 @@ def test_server_single_log_header_scrollable_and_banner_order(_renderer_page, mo
         assert sum(1 for t in texts if t.endswith(" lines")) == 1
 
         banners = _banner_indices(controls)
-        assert len(banners) == 2, f"expected 2 banners, found {len(banners)} at {banners}"
+        assert len(banners) == 3, f"expected 3 banners, found {len(banners)} at {banners}"
 
         def _idx(predicate) -> int:
             for i, c in enumerate(controls):
@@ -239,7 +239,7 @@ def test_server_single_log_header_scrollable_and_banner_order(_renderer_page, mo
         catalog_i = _idx(lambda vals: any(v and v.startswith("Model Catalog") for v in vals))
         logs_i = _idx(lambda vals: "Logs" in vals)
         assert catalog_i != -1 and logs_i != -1, "catalog or log card missing from the page"
-        assert banners[0] < catalog_i < banners[1] < logs_i, (
+        assert banners[0] < banners[1] < catalog_i < banners[2] < logs_i, (
             f"banner order wrong: banners={banners}, catalog={catalog_i}, logs={logs_i}"
         )
         assert logs_i == len(controls) - 1, (

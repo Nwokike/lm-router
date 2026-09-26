@@ -27,6 +27,16 @@ def live_tools_for(mcp_tools: list[str], server_name: str) -> list[str]:
     return [t[len(prefix) :] for t in mcp_tools if t.startswith(prefix)]
 
 
+def apply_api_key(headers: dict[str, str], api_key: str) -> dict[str, str]:
+    """The dedicated (optional) API key field fills the standard Authorization
+    header. Headers JSON stays the escape hatch for anything custom; a key in
+    the dedicated field wins for Authorization, because that is the field the
+    user deliberately filled in."""
+    if not api_key.strip():
+        return dict(headers)
+    return {**headers, "Authorization": f"Bearer {api_key.strip()}"}
+
+
 @ft.component
 def SettingsScreen():
     state = ft.use_context(AppStateCtx)
@@ -90,6 +100,7 @@ def SettingsScreen():
     m_headers, set_m_headers = ft.use_state("")
     m_env, set_m_env = ft.use_state("")
     m_cwd, set_m_cwd = ft.use_state("")
+    m_api_key, set_m_api_key = ft.use_state("")
     m_timeout, set_m_timeout = ft.use_state("")
     m_sse_to, set_m_sse_to = ft.use_state("")
 
@@ -280,6 +291,11 @@ def SettingsScreen():
             except ValueError:
                 show_snack(page, "Headers must be a JSON object.")
                 return
+        # Dedicated optional API key (remote servers): fills the standard
+        # Authorization header so nobody has to hand-write Headers JSON for a
+        # plain bearer token. Not every server needs one — it stays optional.
+        if m_transport != "stdio" and m_api_key.strip():
+            headers = apply_api_key(headers, m_api_key)
         # MCPServerConfig takes `command` (stdio) or `url` (remote). A single
         # `target` key is dropped by extra="ignore", so every add used to fail
         # validation while the screen still reported success.
@@ -333,6 +349,7 @@ def SettingsScreen():
         set_m_target("")
         set_m_env("")
         set_m_cwd("")
+        set_m_api_key("")
         set_m_timeout("")
         set_m_sse_to("")
         set_m_headers("")
@@ -683,20 +700,36 @@ def SettingsScreen():
     )
 
     provider_rows: list = [
-        # Section header supplies the title; this row is the action.
+        # Section header supplies the title; this row is the action. Owner:
+        # a single dim line read as filler and users scrolled straight past
+        # the feature — give it a bold lead line, say what it is, and label
+        # the button.
         _pad(
             ft.Row(
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 wrap=False,
                 scroll=ft.ScrollMode.AUTO,
                 controls=[
-                    ft.Text(
-                        "Route chat through another OpenAI-compatible endpoint",
-                        size=tokens.FONT_SM,
-                        color=theme.dim(is_dark),
+                    ft.Column(
+                        spacing=tokens.SPACE_XXS,
+                        tight=True,
+                        expand=True,
+                        controls=[
+                            ft.Text(
+                                "Route chat through another OpenAI-compatible endpoint",
+                                size=tokens.FONT_SM,
+                                weight=ft.FontWeight.W_600,
+                            ),
+                            ft.Text(
+                                "OpenRouter, your own server, or any compatible API. "
+                                "Keys stay on this device.",
+                                size=tokens.FONT_XS,
+                                color=theme.dim(is_dark),
+                            ),
+                        ],
                     ),
                     ft.OutlinedButton(
-                        "+ Add",
+                        "+ Add provider",
                         on_click=lambda _: set_provider_open(True),
                     ),
                 ],
@@ -1130,6 +1163,17 @@ def SettingsScreen():
                     ]
                     if m_transport == "stdio"
                     else [
+                        _pad(
+                            ft.TextField(
+                                label="API key (optional)",
+                                hint_text="sent as Authorization: Bearer ...",
+                                value=m_api_key,
+                                password=True,
+                                can_reveal_password=True,
+                                text_size=tokens.FONT_BODY_SM,
+                                on_change=lambda e: set_m_api_key(str(e.control.value or "")),
+                            ),
+                        ),
                         _pad(
                             ft.TextField(
                                 label="Request timeout seconds (optional)",

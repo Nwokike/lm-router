@@ -168,3 +168,23 @@ def test_live_tools_for_strips_only_its_own_server_prefix() -> None:
     assert live_tools_for(tools, "demo") == ["echo", "add", "tools.calc"]
     assert live_tools_for(tools, "demo2") == ["hidden"]
     assert live_tools_for(tools, "absent") == []
+
+
+def test_apply_api_key_fills_authorization_header() -> None:
+    """Owner ask: an MCP API key must not require hand-writing Headers JSON.
+
+    The dedicated field fills the standard Bearer header, keeps custom
+    headers, overrides a stale Authorization, and is a no-op when empty
+    (not every server uses a key).
+    """
+    from screens.settings_screen import apply_api_key
+
+    assert apply_api_key({}, "sk-1") == {"Authorization": "Bearer sk-1"}
+    merged = apply_api_key({"X-Custom": "v"}, "sk-1")
+    assert merged == {"X-Custom": "v", "Authorization": "Bearer sk-1"}
+    # The dedicated field wins for Authorization (user's latest intent).
+    assert apply_api_key({"Authorization": "Bearer old"}, " sk-2 ")["Authorization"] == (
+        "Bearer sk-2"
+    )
+    # Optional: empty key never injects anything.
+    assert apply_api_key({"A": "b"}, "") == {"A": "b"}

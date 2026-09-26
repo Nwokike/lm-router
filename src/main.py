@@ -1462,6 +1462,12 @@ class AppController:
         err = errors[0]
         loc = ".".join(str(p) for p in err.get("loc", []))
         msg = err.get("msg", "invalid")
+        # Pydantic's URL diagnostics ("invalid international domain name")
+        # mean nothing to a phone user; name the fix instead.
+        if str(err.get("type", "")).startswith("url") or "valid URL" in msg:
+            return (
+                "That is not a valid URL. Include https:// (example: https://mcp.example.com/mcp)."
+            )
         return f"Field '{loc}': {msg}"
 
     def _save_settings(self, data: dict) -> None:

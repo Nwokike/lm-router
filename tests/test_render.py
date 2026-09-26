@@ -1056,3 +1056,62 @@ def test_settings_mcp_dropdown_lists_tools_per_server(
     assert "set_mcp_expanded" in source
     assert "No tools listed yet. Run Test" in source
     assert "This phone cannot run local (stdio) servers" in source
+    # Owner: a dedicated optional API key field (remote servers), not just
+    # hand-written Headers JSON.
+    assert 'label="API key (optional)"' in source
+    # Owner: the Providers lead must state what it is (users scrolled past
+    # a lone dim line) and the button must be labeled.
+    assert '"+ Add provider"' in source
+    assert "Keys stay on this device." in source
+
+
+def test_reasoning_is_always_first_usage_never_above_it(_renderer_page) -> None:
+    """Owner rule: in an assistant message the reasoning block is ALWAYS the
+    first thing; the usage caption sits after the answer and can never ride
+    above the reasoning."""
+    from core.state import state
+    from screens.chat_screen import ChatScreen
+
+    saved = (state.messages, state.busy, state.gateway_running, state.onboarding_done)
+    state.busy = False
+    state.gateway_running = True
+    state.onboarding_done = True
+    state.messages = [
+        {"role": "user", "content": "q"},
+        {
+            "role": "assistant",
+            "content": "THE ANSWER BODY",
+            "reasoning": "THE REASONING TEXT",
+            "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+        },
+    ]
+    root = _render(ChatScreen)
+    try:
+        walked = list(_walk_all(root))
+
+        def pos(predicate) -> int:
+            return next(i for i, node in enumerate(walked) if predicate(node))
+
+        reasoning_i = pos(
+            lambda n: (
+                isinstance(n, ft.Text) and getattr(n, "value", None) in ("Reasoning", "Thinking…")
+            )
+        )
+        body_i = pos(
+            lambda n: isinstance(n, ft.Markdown) and getattr(n, "value", None) == "THE ANSWER BODY"
+        )
+        usage_i = pos(
+            lambda n: (
+                isinstance(n, ft.Text)
+                and isinstance(getattr(n, "value", None), str)
+                and "· out" in n.value
+                and "tokens" in n.value
+            )
+        )
+        assert reasoning_i < body_i < usage_i, (
+            f"order wrong: reasoning@{reasoning_i} body@{body_i} usage@{usage_i}"
+        )
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.messages, state.busy, state.gateway_running, state.onboarding_done = saved

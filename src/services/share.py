@@ -155,8 +155,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"0\r\n\r\n")
         except (BrokenPipeError, ConnectionResetError, OSError) as exc:
             # Headers are already out: a vanished client (or a gateway that
-            # stopped mid-stream) can only be logged, never answered.
-            LOG.info("share proxy stream ended early: %s", exc)
+            # stopped mid-stream) can only be logged, never answered. INFO,
+            # not WARNING: when the response still landed, the client simply
+            # closed the stream (owner read "Broken pipe" as a fault).
+            LOG.info("share proxy stream closed by the client: %s", exc)
             self.close_connection = True
 
     def _forward(self) -> None:

@@ -124,6 +124,7 @@ class LocalTunnel:
     def _connection_loop(self, index: int) -> None:
         """Hold one relay connection open, reconnecting until stopped."""
         backoff = 1.0
+        dropped = False
         while not self._stop.is_set():
             try:
                 # socket context managers close both ends on exit; tracking
@@ -136,6 +137,13 @@ class LocalTunnel:
                 ) as relay:
                     relay.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
                     self._track(relay)
+                    if dropped:
+                        # Phone doze and DNS blips drop these constantly; the
+                        # loop always retried, but the silence made recovery
+                        # invisible and users restarted a tunnel that had
+                        # already healed itself.
+                        LOG.info("tunnel conn %s reconnected", index)
+                        dropped = False
                     try:
                         with socket.create_connection(
                             ("127.0.0.1", self.local_port), timeout=_CONNECT_TIMEOUT
@@ -151,6 +159,7 @@ class LocalTunnel:
             except Exception as exc:
                 if self._stop.is_set():
                     return
+                dropped = True
                 LOG.warning("tunnel conn %s dropped: %s", index, exc)
                 if self._on_error is not None:
                     now = time.monotonic()
@@ -158,7 +167,7 @@ class LocalTunnel:
                     if key != self._last_error_key or now - self._last_error_at >= 60.0:
                         self._last_error_key = key
                         self._last_error_at = now
-                        self._on_error(f"Tunnel connection dropped: {exc}")
+                        self._on_error(f"Tunnel connection dropped (will keep retrying): {exc}")
                 self._stop.wait(backoff)
                 backoff = min(backoff * 2, 15.0)
 
