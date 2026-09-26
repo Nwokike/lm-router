@@ -92,8 +92,9 @@ def test_rate_hint_is_surfaced_for_the_user() -> None:
         "rate_hint": {"tier": "generous", "approx_per_hour": 200, "label": "Free tier"},
     }
     assert rate_hint_label(model) == "Free tier"
-    # A hint with only a tier/hour still produces something readable.
-    assert "/hour" in rate_hint_label({"rate_hint": {"tier": "standard", "approx_per_hour": 60}})
+    # D5: without a label we show NOTHING rather than inventing policy
+    # numbers — the gateway's label is the only approved copy.
+    assert rate_hint_label({"rate_hint": {"tier": "standard", "approx_per_hour": 60}}) == ""
     # The rotating model explains itself.
     assert "rotates" in rate_hint_label(
         {"rate_hint": {"label": "Free tier, rotates across available models"}},

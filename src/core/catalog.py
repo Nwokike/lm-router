@@ -110,13 +110,6 @@ def chat_models(catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return auto + rest
 
 
-def _as_int(value: object, default: int) -> int:
-    try:
-        return int(value)  # type: ignore[call-overload]
-    except TypeError, ValueError:
-        return default
-
-
 def _as_float(value: object, default: float) -> float:
     try:
         return float(value)  # type: ignore[call-overload]
@@ -125,24 +118,19 @@ def _as_float(value: object, default: float) -> float:
 
 
 def rate_hint_label(model: dict[str, Any] | None) -> str:
-    """One-line rate-limit summary, e.g. "Free tier, ~200/hour"."""
+    """The gateway's own one-line rate-limit copy (its label, verbatim).
+
+    D5: rate limits surface only as the approximate profile the GATEWAY
+    publishes — never a policy number we synthesize ourselves, and never a
+    parse of untrusted metadata (a router publishing "lots" once raised
+    inside agent.py's RateLimitError handler). Label or nothing.
+    """
     if not model:
         return ""
     hint = model.get("rate_hint")
     if not isinstance(hint, dict):
         return ""
-    label = str(hint.get("label") or "").strip()
-    if label:
-        return label
-    # Remote metadata is untrusted: a router publishing "lots" used to raise
-    # inside agent.py's `except RateLimitError` (a SIBLING catch) — the turn
-    # died with no error row at all — and the same call sits in two render
-    # paths. Coerce defensively; unparseable falls back to the tier only.
-    per_hour = _as_int(hint.get("approx_per_hour"), 0)
-    tier = str(hint.get("tier") or "").strip()
-    if per_hour > 0:
-        return f"{tier.capitalize() or 'Free tier'}, ~{per_hour:,}/hour"
-    return tier.capitalize()
+    return str(hint.get("label") or "").strip()
 
 
 def model_label(model: dict[str, Any]) -> str:

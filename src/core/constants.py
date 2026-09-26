@@ -25,6 +25,6 @@ USE_TEST_IDS = False
 AD_BANNER_UNIT_ID_ANDROID = "ca-app-pub-5679949845754640/9070470494"
 AD_INTERSTITIAL_UNIT_ID_ANDROID = "ca-app-pub-5679949845754640/2372451777"
 
-# Keyless hosted search endpoint (same one OpenCode's own websearch tool calls).
+# Keyless hosted search endpoint (the same one the gateway's own websearch tool calls).
 SEARCH_ENDPOINT = "https://mcp.exa.ai/mcp"
 SEARCH_TIMEOUT = 25.0

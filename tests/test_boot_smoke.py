@@ -821,3 +821,20 @@ def test_bench_guards_and_live_sweep(boot_page) -> None:
             state.retesting,
             state.retest_progress,
         ) = saved
+
+
+def test_boot_log_never_carries_gateway_tokens(boot_page) -> None:
+    """The ring renders on the Server screen: a boot that logged a gateway
+    token (invariant 3) would surface it to any user who opens the log."""
+    from test_router_invariants import FORBIDDEN
+
+    from core import logging as applog
+    from main import AppController
+
+    controller = AppController(boot_page)
+    controller.init()
+    boot_page.drain()
+
+    blob = " ".join(record.get("msg", "") for record in applog.records()).lower()
+    for token in FORBIDDEN:
+        assert token not in blob, f"gateway token {token!r} surfaced in the log ring"

@@ -1038,8 +1038,10 @@ def ServerScreen():
                     controls=[
                         ft.Row(
                             spacing=tokens.SPACE_SM,
-                            # Zero slack here: dot, status, port, version and
-                            # uptime overflowed a phone width.
+                            # Zero slack here: dot, status, port and uptime
+                            # overflowed a phone width. No version: showing
+                            # the ROUTER's version is banned (invariant 11 —
+                            # uptime + counts are the health surface).
                             wrap=False,
                             scroll=ft.ScrollMode.AUTO,
                             controls=[
@@ -1052,10 +1054,6 @@ def ServerScreen():
                                 ft.Text(status_text, weight=ft.FontWeight.W_600),
                                 ft.Text(
                                     f"port {state.gateway_port}",
-                                    color=ft.Colors.ON_SURFACE_VARIANT,
-                                ),
-                                ft.Text(
-                                    f"v{state.gateway_version or '?'}",
                                     color=ft.Colors.ON_SURFACE_VARIANT,
                                 ),
                                 ft.Text(
