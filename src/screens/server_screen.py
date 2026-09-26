@@ -457,7 +457,10 @@ def ServerScreen():
                     border_radius=tokens.RADIUS_MD,
                     bgcolor=ft.Colors.with_opacity(tokens.OPACITY_FAINT, theme.WARNING),
                     content=ft.Text(
-                        "No key: anyone with the URL can spend the free-model quota.",
+                        "Open sharing: anyone with this URL runs on your "
+                        "connection, so their requests count against your "
+                        "free-model rate limits. Turn on Require API key to "
+                        "restrict who can use it.",
                         size=tokens.FONT_2XS,
                         color=theme.WARNING,
                     ),
@@ -673,33 +676,42 @@ def ServerScreen():
     # ONE control tree: this row used to be inserted into two headers, which
     # is an invalid tree (a control with two parents) and duplicated the
     # title and the line count.
+    def _log_chip(label: str) -> ft.Container:
+        """Filter toggle at the chat row's pill scale.
+
+        Material Chips were taller than the log lines themselves (owner
+        complaint: the filter bar out-sized the logs it filters). This is the
+        same compact pill shape the SessionBar uses above the responses.
+        """
+        active = log_filter == label
+        fg = theme.PRIMARY if active else theme.dim(is_dark)
+        return ft.Container(
+            padding=ft.Padding.symmetric(
+                horizontal=tokens.SPACE_SNUG,
+                vertical=tokens.SPACE_XXS,
+            ),
+            border_radius=tokens.RADIUS_PILL,
+            bgcolor=ft.Colors.with_opacity(
+                tokens.OPACITY_MEDIUM if active else tokens.OPACITY_FAINT,
+                fg,
+            ),
+            on_click=lambda _, lvl=label: set_log_filter(lvl),
+            content=ft.Text(
+                label,
+                size=tokens.FONT_XS,
+                weight=ft.FontWeight.W_600,
+                color=fg,
+            ),
+        )
+
     filter_chips = ft.Row(
         spacing=tokens.SPACE_TIGHT,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
         controls=[
-            ft.Chip(
-                label="ALL",
-                selected=log_filter == "ALL",
-                show_checkmark=False,
-                on_select=lambda _: set_log_filter("ALL"),
-            ),
-            ft.Chip(
-                label="INFO",
-                selected=log_filter == "INFO",
-                show_checkmark=False,
-                on_select=lambda _: set_log_filter("INFO"),
-            ),
-            ft.Chip(
-                label="WARNING",
-                selected=log_filter == "WARNING",
-                show_checkmark=False,
-                on_select=lambda _: set_log_filter("WARNING"),
-            ),
-            ft.Chip(
-                label="ERROR",
-                selected=log_filter == "ERROR",
-                show_checkmark=False,
-                on_select=lambda _: set_log_filter("ERROR"),
-            ),
+            _log_chip("ALL"),
+            _log_chip("INFO"),
+            _log_chip("WARNING"),
+            _log_chip("ERROR"),
         ],
     )
 

@@ -586,7 +586,7 @@ def test_server_screen_key_warning_matches_the_insecure_state(stub_page, monkeyp
         lambda: ControllerMethodsCtx(ControllerMethods(), ServerScreen),
     )
     try:
-        assert "No key: anyone with the URL can spend" in _texts(component)
+        assert "Open sharing:" in _texts(component)
     finally:
         component._detach_observable_subscriptions()
         component._state.mounted = False
@@ -601,7 +601,7 @@ def test_server_screen_key_warning_matches_the_insecure_state(stub_page, monkeyp
         lambda: ControllerMethodsCtx(ControllerMethods(), ServerScreen),
     )
     try:
-        assert "No key: anyone with the URL can spend" not in _texts(component)
+        assert "Open sharing:" not in _texts(component)
         fields = [
             node
             for node in _walk_all(component)

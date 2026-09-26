@@ -46,6 +46,11 @@ def redact(text: str) -> str:
 class RingHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
+            # Ad delivery is operator business (owner rule): ad_service
+            # records never surface in the on-screen ring/terminal. The file
+            # and console handlers keep them for real debugging.
+            if "ad_service" in (record.pathname or ""):
+                return
             message = redact(record.getMessage())
         except Exception:
             message = "<unformattable log record>"

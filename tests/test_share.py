@@ -253,3 +253,26 @@ def test_auth_off_forwards_a_clients_own_gateway_key(echo_gateway) -> None:
         assert received[0]["authorization"] == "Bearer client-key"
     finally:
         session.stop()
+
+
+def test_rekey_swaps_auth_live_without_moving_the_port(gateway) -> None:
+    """Owner decision B: touching Require API key mid-share restarts the
+    proxy afresh — same port (the tunnel target), so the public URL never
+    moves, and the new key applies in BOTH directions immediately."""
+    session = _start(ShareSession(gateway, key="sk-lm-one"))
+    port = session.proxy_port
+    try:
+        assert _probe(session, "Bearer sk-lm-one") == 200
+        assert _probe(session) == 401
+
+        assert session.rekey("") is True
+        assert session.proxy_port == port, "the tunnel target port must not move"
+        assert _probe(session) == 200, "turning the key off must open the live proxy"
+
+        assert session.rekey("sk-lm-two") is True
+        assert session.proxy_port == port
+        assert _probe(session) == 401, "turning the key on must close the live proxy"
+        assert _probe(session, "Bearer sk-lm-one") == 401, "the old key dies immediately"
+        assert _probe(session, "Bearer sk-lm-two") == 200
+    finally:
+        session.stop()

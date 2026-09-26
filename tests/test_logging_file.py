@@ -68,3 +68,41 @@ def test_redact_covers_modern_key_shapes() -> None:
         cleaned = redact(line)
         assert key not in cleaned, f"{key} survived redaction: {cleaned}"
         assert "sk-[REDACTED]" in cleaned
+
+
+def test_ad_service_records_never_reach_the_screen_ring() -> None:
+    """Ad delivery is operator business (owner rule): ad_service records may
+    land in the file/console for debugging but must never surface in the
+    on-screen log ring the Server screen renders."""
+    import logging
+
+    from core import logging as applog
+
+    ring_before = len(applog.records())
+    ad_record = logging.LogRecord(
+        "lmrouter",
+        logging.INFO,
+        r"C:\app\src\services\ad_service.py",
+        58,
+        "ads: non-mobile platform, consent flow skipped",
+        None,
+        None,
+    )
+    applog.RingHandler().emit(ad_record)
+    assert len(applog.records()) == ring_before, "ad record must not enter the ring"
+    assert not any("ads:" in record.get("msg", "") for record in applog.records()), (
+        "an ad record is visible in the ring"
+    )
+
+    # Ordinary app records still flow.
+    normal = logging.LogRecord(
+        "lmrouter",
+        logging.INFO,
+        r"C:\app\src\screens\server_screen.py",
+        1,
+        "ring-visible-marker",
+        None,
+        None,
+    )
+    applog.RingHandler().emit(normal)
+    assert any("ring-visible-marker" in record.get("msg", "") for record in applog.records())

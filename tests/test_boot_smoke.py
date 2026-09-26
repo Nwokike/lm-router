@@ -685,3 +685,51 @@ def test_boot_primes_the_model_and_keeps_the_connectivity_handle(boot_page) -> N
         assert connectivity in boot_page.services
     finally:
         state.model = previous_model
+
+
+def test_share_key_settings_rebind_the_live_proxy(boot_page) -> None:
+    """Toggle/key changes while sharing must reach the LIVE proxy (the
+    handler captured its key at bind time — both directions were stale
+    until a manual restart). No session => the hooks are silent no-ops."""
+    from main import AppController
+
+    controller = AppController(boot_page)
+    controller.init()
+    boot_page.drain()
+
+    class _FakeSession:
+        def __init__(self) -> None:
+            self.keys: list[str] = []
+
+        def rekey(self, key: str) -> bool:
+            self.keys.append(key)
+            return True
+
+    # Not sharing: save/regenerate must not try to rebind anything.
+    controller.methods.save_settings({"require_share_key": True})
+    controller.methods.regenerate_share_key()
+    assert controller._share is None
+
+    session = _FakeSession()
+    controller._share = session  # type: ignore[assignment]
+
+    # require_share_key ON: the derived key is a fresh sk-lm- (auto-generated
+    # because the field starts empty).
+    controller.methods.save_settings({"require_share_key": True})
+    assert session.keys, "toggling the key while sharing must rebind the proxy"
+    assert session.keys[-1].startswith("sk-lm-"), session.keys
+
+    # require_share_key OFF: the live proxy must OPEN.
+    controller.methods.save_settings({"require_share_key": False})
+    assert session.keys[-1] == "", "turning the key off must rebind with no key"
+
+    # Regenerating mid-share rebinds with the new key (key required again —
+    # with the key OFF the live proxy correctly stays open even though a
+    # stored key is generated for later).
+    controller.methods.save_settings({"require_share_key": True})
+    before = session.keys[-1]
+    assert before.startswith("sk-lm-"), session.keys
+    controller.methods.regenerate_share_key()
+    assert session.keys[-1].startswith("sk-lm-") and session.keys[-1] != before
+
+    controller._share = None

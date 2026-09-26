@@ -15,6 +15,8 @@ import pytest
 from flet.components.component import Component, Renderer
 from flet.controls.context import _context_page
 
+from core import tokens
+
 
 class _FakeServices(list):
     def register_service(self, svc):
@@ -513,3 +515,43 @@ def test_navigation_bar_attaches_to_the_shell_view(_renderer_page):
 
     source = inspect.getsource(AppShell)
     assert "_sync_navigation_bar(page, state, methods)" in source
+
+
+def test_server_log_filter_uses_chat_scale_pills(_renderer_page) -> None:
+    """The old Material Chips out-sized the log lines they filter (owner
+    complaint). The bar must be compact pills at the chat row's scale."""
+    from core.state import state
+    from screens.server_screen import ServerScreen
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    saved = (state.gateway_running, state.onboarding_done)
+    state.gateway_running = True
+    state.onboarding_done = True
+    root = _render(lambda: ControllerMethodsCtx(ControllerMethods(), ServerScreen))
+    try:
+        nodes = list(_walk_all(root))
+        assert not any(isinstance(node, ft.Chip) for node in nodes), (
+            "Material Chips are back and they out-size the log rows"
+        )
+        labels = {
+            getattr(node, "value", None): getattr(node, "size", None)
+            for node in nodes
+            if isinstance(node, ft.Text)
+            and getattr(node, "value", None) in ("ALL", "INFO", "WARNING", "ERROR")
+        }
+        assert set(labels) == {"ALL", "INFO", "WARNING", "ERROR"}, labels
+        assert all(size == tokens.FONT_XS for size in labels.values()), labels
+        # The pills are tappable containers, not dead text.
+        pill_clicks = [
+            node
+            for node in nodes
+            if isinstance(node, ft.Container)
+            and node.on_click is not None
+            and isinstance(node.content, ft.Text)
+            and getattr(node.content, "value", None) in ("ALL", "INFO", "WARNING", "ERROR")
+        ]
+        assert len(pill_clicks) == 4, "each filter pill must be tappable"
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.gateway_running, state.onboarding_done = saved

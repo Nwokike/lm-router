@@ -259,6 +259,26 @@ class ShareSession:
         LOG.info("share proxy listening on 127.0.0.1:%s (auth=%s)", self.proxy_port, bool(self.key))
         return True
 
+    def rekey(self, key: str) -> bool:
+        """Swap the enforced key WITHOUT dropping the tunnel.
+
+        The handler class captures required_key at bind time, so toggling
+        "Require API key" (or regenerating the key) mid-share did nothing
+        until a manual restart — in BOTH directions (owner hit both). The
+        proxy rebinds on the SAME port, which is exactly what the tunnel
+        points at, so the public URL and the tunnel survive untouched.
+        """
+        self.key = key
+        if self._server is None:
+            return self.start_proxy()
+        server, self._server = self._server, None
+        thread, self._thread = self._thread, None
+        server.shutdown()
+        server.server_close()
+        if thread is not None:
+            thread.join(timeout=3)
+        return self.start_proxy()
+
     # ── lifecycle ──────────────────────────────────────────────────────
     def stop(self) -> None:
         if self._server is not None:

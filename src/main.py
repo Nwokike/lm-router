@@ -1015,7 +1015,32 @@ class AppController:
         # the snackbar claimed a new one.
         state.settings_version += 1
         LOG.info("share key regenerated")
+        self._refresh_share_key()
         self._notify_info("New key generated. Copy it to the other client.")
+
+    def _refresh_share_key(self) -> None:
+        """Apply share-key settings to the LIVE proxy (owner decision: if the
+        toggle is touched at all while sharing, restart the proxy afresh and
+        show the new details). The rebind keeps the same port, so the tunnel
+        and public URL never move."""
+        session = self._share
+        if session is None:
+            return
+        # Same derivation as _start_share, including auto-generation.
+        if self.settings.require_share_key and not self.settings.share_key:
+            self.settings.share_key = generate_key()
+            self.settings.save()
+            state.settings_version += 1
+        key = self.settings.share_key if self.settings.require_share_key else ""
+        if not session.rekey(key):
+            LOG.warning("share proxy rebind failed")
+            self._stop_share()
+            self._set_share_error("Sharing stopped: could not apply the new key settings.")
+            return
+        LOG.info("share proxy re-keyed (auth=%s)", bool(key))
+        self._notify_info(
+            "Sharing restarted with your new key settings. The URL is unchanged.",
+        )
 
     def _start_share(self) -> None:
         if not state.gateway_running:
@@ -1394,6 +1419,11 @@ class AppController:
             # without this the Settings switch and the pill disagreed until
             # restart (the chat-side toggle writes both).
             state.search_enabled = self.settings.search_enabled
+        if self._share is not None and {"require_share_key", "share_key"} & set(updates):
+            # The proxy captured its key at bind time; rebind live (owner
+            # decision: touching the toggle/key mid-share restarts sharing
+            # and the card immediately shows the new details).
+            self._refresh_share_key()
 
     def _add_provider(self, data: dict) -> None:
         name = str(data.get("name", "")).strip()
