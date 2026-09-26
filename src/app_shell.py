@@ -15,55 +15,66 @@ from screens.settings_screen import SettingsScreen
 from state.controller_ctx import ControllerMethodsCtx
 
 
+def _sync_navigation_bar(page, state, methods) -> None:
+    """Attach the shell's NavigationBar to the TOP view (KTV's View-chrome
+    pattern: Material owns the bar's height and system insets).
+
+    Module-level so it is testable without the effect machinery: flet only
+    flushes use_effect callbacks against a live session, which the render
+    harness has none of. Targets views[-1] — the Android back underlay sits
+    at views[0] once installed and is never visible; attaching the bar there
+    hid the bottom navigation entirely (owner device regression).
+    """
+    if not getattr(page, "views", None):
+        return
+    view = page.views[-1]
+    if not state.onboarding_done:
+        if view.navigation_bar is not None:
+            view.navigation_bar = None
+            with contextlib.suppress(Exception):
+                page.update()
+        return
+    index = state.selected_tab if 0 <= state.selected_tab < 4 else 0
+    view.navigation_bar = ft.NavigationBar(
+        selected_index=index if index < 3 else 0,
+        on_change=lambda e: methods.set_tab(int(e.control.selected_index)),
+        destinations=[
+            ft.NavigationBarDestination(
+                icon=ft.Icons.CHAT_BUBBLE_OUTLINE,
+                selected_icon=ft.Icons.CHAT_BUBBLE,
+                label="Chat",
+            ),
+            ft.NavigationBarDestination(
+                icon=ft.Icons.DNS_OUTLINED,
+                selected_icon=ft.Icons.DNS,
+                label="Server",
+            ),
+            ft.NavigationBarDestination(
+                icon=ft.Icons.SETTINGS_OUTLINED,
+                selected_icon=ft.Icons.SETTINGS,
+                label="Settings",
+            ),
+        ],
+    )
+    with contextlib.suppress(Exception):
+        page.update()
+
+
 @ft.component
 def AppShell():
     state = ft.use_context(AppStateCtx)
     methods = ft.use_context(ControllerMethodsCtx)
 
-    def _sync_navigation_bar() -> None:
-        # KTV Player's pattern: the NavigationBar is View chrome, not a child
-        # of the screen Column, so Material owns its height and system insets.
-        # page.render() only replaces views[0].controls, so what we set here
-        # survives re-renders; the effect re-runs on tab/onboarding changes.
+    def _sync_nav_effect() -> None:
         page = getattr(ft.context, "page", None)
-        if page is None or not getattr(page, "views", None):
+        if page is None:
             return
-        view = page.views[0]
-        if not state.onboarding_done:
-            if view.navigation_bar is not None:
-                view.navigation_bar = None
-                with contextlib.suppress(Exception):
-                    page.update()
-            return
-        index = state.selected_tab if 0 <= state.selected_tab < 4 else 0
-        view.navigation_bar = ft.NavigationBar(
-            selected_index=index if index < 3 else 0,
-            on_change=lambda e: methods.set_tab(int(e.control.selected_index)),
-            destinations=[
-                ft.NavigationBarDestination(
-                    icon=ft.Icons.CHAT_BUBBLE_OUTLINE,
-                    selected_icon=ft.Icons.CHAT_BUBBLE,
-                    label="Chat",
-                ),
-                ft.NavigationBarDestination(
-                    icon=ft.Icons.DNS_OUTLINED,
-                    selected_icon=ft.Icons.DNS,
-                    label="Server",
-                ),
-                ft.NavigationBarDestination(
-                    icon=ft.Icons.SETTINGS_OUTLINED,
-                    selected_icon=ft.Icons.SETTINGS,
-                    label="Settings",
-                ),
-            ],
-        )
-        with contextlib.suppress(Exception):
-            page.update()
+        _sync_navigation_bar(page, state, methods)
 
     # Hooks run before any early return so the effect survives the
     # onboarding -> dashboard transition (rules of hooks).
     ft.use_effect(
-        _sync_navigation_bar,
+        _sync_nav_effect,
         [state.selected_tab, state.onboarding_done],
     )
 

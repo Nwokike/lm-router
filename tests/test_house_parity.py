@@ -119,8 +119,12 @@ def test_page_chrome_zeroed_and_nav_is_view_chrome() -> None:
 
     assert "page.padding = 0" in main and "page.spacing = 0" in main
     # KTV pattern: nav lives on the View, never inside the shell Column,
-    # and its height is never overridden.
-    assert "page.views[0]" in shell and "view.navigation_bar" in shell
+    # and its height is never overridden. Target views[-1]: the back underlay
+    # owns views[0] once installed, and attaching the bar there hid the bottom
+    # navigation entirely (owner device regression).
+    assert "view = page.views[-1]" in shell, "nav must target the TOP (shell) view"
+    assert "view = page.views[0]" not in shell, "views[0] is the back underlay"
+    assert "view.navigation_bar" in shell
     assert "_sync_navigation_bar" in shell
     assert "ft.use_effect" in shell
     assert "height=64" not in shell, "hardcoded nav height is back"

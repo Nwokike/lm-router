@@ -464,3 +464,52 @@ def test_server_header_exposes_the_activity_log_and_notice_keeps_remedy(
         root._detach_observable_subscriptions()
         root._state.mounted = False
         state.notice, state.onboarding_done, state.selected_tab = saved
+
+
+def test_navigation_bar_attaches_to_the_shell_view(_renderer_page):
+    """The back underlay makes page.views[0] the never-visible blank view —
+    attaching the NavigationBar there hid the bottom navigation entirely
+    (owner device regression). It must land on the TOP (shell) view.
+
+    Called directly because flet only flushes use_effect callbacks against a
+    live session, which the render harness has none of; the wiring pin below
+    keeps the effect hooked to this function.
+    """
+    from app_shell import AppShell, _sync_navigation_bar
+    from core.state import state
+    from state.controller_ctx import ControllerMethods
+
+    page = _renderer_page
+    shell = page.views[0]
+    shell.route = "/"
+    # Exactly what AppController._ensure_back_underlay inserts after render.
+    page.views.insert(0, ft.View(route="/blank", bgcolor=ft.Colors.BLACK, padding=0))
+    blank = page.views[0]
+
+    saved = (state.onboarding_done, state.selected_tab)
+    state.onboarding_done = True
+    state.selected_tab = 0
+    try:
+        _sync_navigation_bar(page, state, ControllerMethods())
+        assert shell.navigation_bar is not None, (
+            "the NavigationBar must attach to the shell (top view)"
+        )
+        assert blank.navigation_bar is None, (
+            "the NavigationBar must never land on the back underlay"
+        )
+        assert shell.navigation_bar.selected_index == 0
+
+        # onboarding gate: bar removed again when onboarding owns the screen
+        state.onboarding_done = False
+        _sync_navigation_bar(page, state, ControllerMethods())
+        assert shell.navigation_bar is None
+    finally:
+        state.onboarding_done, state.selected_tab = saved
+        page.views[:] = [shell]
+
+    # Wiring pin: the component's effect must still call the hoisted sync
+    # (the effect itself never flushes in this harness).
+    import inspect
+
+    source = inspect.getsource(AppShell)
+    assert "_sync_navigation_bar(page, state, methods)" in source

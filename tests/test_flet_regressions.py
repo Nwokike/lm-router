@@ -110,14 +110,16 @@ def test_app_shell_navigation_handler_uses_control_payload(stub_page):
     """
     import inspect
 
-    from app_shell import AppShell
+    # The handler lives in the module-level sync (hoisted so it is testable
+    # without the effect machinery); the component's effect calls it.
+    from app_shell import _sync_navigation_bar
 
-    source = inspect.getsource(AppShell)
+    source = inspect.getsource(_sync_navigation_bar)
     assert "e.control.selected_index" in source, (
-        "AppShell NavigationBar handler must use e.control.selected_index"
+        "NavigationBar handler must use e.control.selected_index"
     )
     assert "int(e.data)" not in source, (
-        "AppShell still reads the NavigationBar payload from e.data, which is None"
+        "NavigationBar handler must not read the payload from e.data, which is None"
     )
 
 
