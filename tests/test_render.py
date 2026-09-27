@@ -1228,6 +1228,13 @@ def test_settings_mcp_dropdown_lists_tools_per_server(
     assert "kiri.ng/terms" in source
     assert "_open_legal_dialog(" in source
     assert '"Usage agreement & legal"' in source
+    # MCP catalog gallery: keyless-first list behind + Add, manual form as
+    # the escape hatch, trust note on top, keyed presets get a key sheet.
+    assert "_open_catalog_dialog(" in source
+    assert '"Bring your own server"' in source
+    assert '"No sign-in"' in source
+    assert '"Needs key"' in source
+    assert "Only connect to services you trust" in source
     assert "_open_more_apps(" in source
     assert "Nwokike/ktv-player" in source
 

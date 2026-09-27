@@ -13,6 +13,7 @@ from core.notify import show_snack
 from core.settings import AppSettings
 from core.state import AppStateCtx
 from services.mcp import split_stdio_command
+from services.mcp_catalog import PRESETS, preset_payload
 from state.controller_ctx import ControllerMethodsCtx
 
 
@@ -48,6 +49,196 @@ def _is_mobile_page(page) -> bool:
         return bool(page.platform.is_mobile())
     except Exception:
         return False
+
+
+def _open_key_sheet(page, methods, preset: dict) -> None:
+    """Keyed preset: collect the one credential and wire the header.
+
+    Replaces the catalog on the dialog stack (show_dialog cannot nest),
+    and stays open until the key validates non-empty — the controller
+    already toasts the specific reason when the server rejects."""
+    if page is None:
+        return
+    auth = preset.get("auth") or {}
+    field = ft.TextField(
+        label=auth.get("key_label", "API key"),
+        password=True,
+        can_reveal_password=True,
+        text_size=tokens.FONT_BODY_SM,
+    )
+
+    def _submit(_e: object) -> None:
+        key = str(field.value or "").strip()
+        if not key:
+            show_snack(page, "Enter your API key.")
+            return
+        if methods.add_mcp_server(preset_payload(preset, key)):
+            page.pop_dialog()
+            show_snack(page, f"{preset['name']} added. Connecting...")
+
+    page.show_dialog(
+        ft.AlertDialog(
+            modal=True,
+            title=ft.Text(
+                f"Connect {preset['name']}",
+                size=tokens.FONT_TITLE,
+                weight=ft.FontWeight.W_600,
+            ),
+            content=ft.Container(
+                width=420,
+                content=ft.Column(
+                    spacing=tokens.SPACE_SM,
+                    tight=True,
+                    controls=[
+                        ft.Text(
+                            preset.get("description", ""),
+                            size=tokens.FONT_BODY_SM,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                        *(
+                            [
+                                ft.Text(
+                                    auth.get("hint", ""),
+                                    size=tokens.FONT_2XS,
+                                    color=ft.Colors.ON_SURFACE_VARIANT,
+                                )
+                            ]
+                            if auth.get("hint")
+                            else []
+                        ),
+                        field,
+                        ft.TextButton(
+                            "Where do I get a key?",
+                            icon=ft.Icons.OPEN_IN_NEW,
+                            on_click=lambda _: methods.open_url(str(auth.get("get_key_url") or "")),
+                        ),
+                    ],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: page.pop_dialog()),
+                ft.FilledButton("Add server", on_click=_submit),
+            ],
+        )
+    )
+
+
+def _open_catalog_dialog(page, methods, open_manual) -> None:
+    """One-tap MCP gallery (the Claude/ChatGPT connector pattern).
+
+    Keyless first — a user reaches a working connection with zero setup;
+    keyed presets open the key sheet; the manual form stays one row away
+    as the escape hatch."""
+    if page is None:
+        return
+
+    rows: list[ft.Control] = []
+    for preset in PRESETS:
+        keyed = bool(preset.get("auth"))
+        accent = theme.WARNING if keyed else ft.Colors.GREEN
+        badge = ft.Container(
+            content=ft.Text(
+                "Needs key" if keyed else "No sign-in",
+                size=tokens.FONT_2XS,
+                color=accent,
+            ),
+            padding=ft.Padding.symmetric(
+                horizontal=tokens.SPACE_TIGHT,
+                vertical=tokens.SPACE_XXS,
+            ),
+            border_radius=tokens.RADIUS_SM,
+            bgcolor=ft.Colors.with_opacity(tokens.OPACITY_FAINT, accent),
+        )
+
+        def _tap(_e: object, preset=preset) -> None:
+            if preset.get("auth"):
+                page.pop_dialog()
+                _open_key_sheet(page, methods, preset)
+            elif methods.add_mcp_server(preset_payload(preset)):
+                page.pop_dialog()
+                show_snack(page, f"{preset['name']} added. Connecting...")
+
+        rows.append(
+            ft.Container(
+                ink=True,
+                border_radius=tokens.RADIUS_SM,
+                padding=ft.Padding.symmetric(
+                    horizontal=tokens.SPACE_SM,
+                    vertical=tokens.SPACE_XS,
+                ),
+                on_click=_tap,
+                content=ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    spacing=tokens.SPACE_SM,
+                    controls=[
+                        ft.Column(
+                            spacing=tokens.SPACE_XXS,
+                            tight=True,
+                            expand=True,
+                            controls=[
+                                ft.Text(
+                                    preset["name"],
+                                    size=tokens.FONT_BODY_SM,
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                                ft.Text(
+                                    preset["description"],
+                                    size=tokens.FONT_2XS,
+                                    color=ft.Colors.ON_SURFACE_VARIANT,
+                                ),
+                            ],
+                        ),
+                        badge,
+                    ],
+                ),
+            )
+        )
+
+    page.show_dialog(
+        ft.AlertDialog(
+            modal=True,
+            title=ft.Text(
+                "Add a tool",
+                size=tokens.FONT_TITLE,
+                weight=ft.FontWeight.W_600,
+            ),
+            content=ft.Container(
+                width=420,
+                height=460,
+                content=ft.Column(
+                    spacing=tokens.SPACE_SM,
+                    tight=True,
+                    expand=True,
+                    controls=[
+                        ft.Text(
+                            "Only connect to services you trust. A server can read "
+                            "what your assistant sees.",
+                            size=tokens.FONT_2XS,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                        ft.ListView(
+                            spacing=tokens.SPACE_XS,
+                            controls=[
+                                *rows,
+                                ft.TextButton(
+                                    "Bring your own server",
+                                    icon=ft.Icons.ADD,
+                                    on_click=lambda _: (
+                                        page.pop_dialog(),
+                                        open_manual(),
+                                    ),
+                                ),
+                            ],
+                            expand=True,
+                        ),
+                    ],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Close", on_click=lambda _: page.pop_dialog()),
+            ],
+        )
+    )
 
 
 def _open_legal_dialog(page, methods) -> None:
@@ -999,7 +1190,14 @@ def SettingsScreen():
                         size=tokens.FONT_SM,
                         color=theme.dim(is_dark),
                     ),
-                    ft.OutlinedButton("+ Add", on_click=lambda _: set_mcp_open(True)),
+                    ft.OutlinedButton(
+                        "+ Add",
+                        on_click=lambda _: (
+                            _open_catalog_dialog(page, methods, lambda: set_mcp_open(True))
+                            if page
+                            else set_mcp_open(True)
+                        ),
+                    ),
                 ],
             ),
         ),
