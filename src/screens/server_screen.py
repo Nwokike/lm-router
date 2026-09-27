@@ -741,8 +741,9 @@ def ServerScreen():
             content=ft.Column(spacing=tokens.SPACE_SM, tight=True, controls=controls),
         )
 
-    # Discovered Model Catalog Card: full catalog in its own bounded list (the
-    # old [:15] slice hid models, upstream now lists 40+).
+    # Discovered Model Catalog Card: EVERY row the gateway lists (the old
+    # [:15] slice hid models, and a later fixed-height viewport hid the
+    # rest behind an inner scroll; upstream lists 40+).
     models_count = len(state.models)
 
     def _not_ready_count() -> int:
@@ -985,14 +986,15 @@ def ServerScreen():
                 # 40+ models otherwise made the page an endless strip.
                 *(
                     [
-                        ft.Container(
-                            height=tokens.CATALOG_VIEWPORT,
-                            clip_behavior=ft.ClipBehavior.HARD_EDGE,
-                            content=ft.ListView(
-                                spacing=tokens.SPACE_SM,
-                                controls=model_items,
-                                # No auto_scroll: same reason as the log card.
-                            ),
+                        # Every row, in the page's own scroll (owner: the
+                        # app must be as good as running the gateway by
+                        # hand — a400px inner box hid rows11+ of 40+ while
+                        # the header counted them all. The root column
+                        # scrolls, so the catalog joins it like every
+                        # other card; no nested scroll trap).
+                        ft.Column(
+                            spacing=tokens.SPACE_SM,
+                            controls=model_items,
                         ),
                     ]
                     if model_items

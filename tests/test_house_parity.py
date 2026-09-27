@@ -401,11 +401,12 @@ def test_server_screen_renders_on_settings_save() -> None:
     assert settings.count("show_snack(") >= 10, "settings confirmations lost their visible surface"
 
 
-def test_catalog_is_bounded_and_logs_never_autoscroll() -> None:
+def test_catalog_renders_every_row_and_logs_never_autoscroll(_renderer_page) -> None:
     server = _read("screens/server_screen.py")
-    assert "tokens.CATALOG_VIEWPORT" in server, (
-        "Model catalog has no bounded vertical viewport (owner: cannot scroll it)"
-    )
+    # Owner reversed an earlier decision (2026-09-27): the fixed-height
+    # inner viewport hid rows 11+ of 40+ while the header counted them all.
+    # The ROOT column scrolls, so the whole catalog must render flat.
+    assert "CATALOG_VIEWPORT" not in server, "the bounded catalog viewport is back"
     assert "auto_scroll=True" not in server, (
         "server screen must never auto-scroll: it yanks the view away "
         "from the log line or model the user is reading"
@@ -415,6 +416,26 @@ def test_catalog_is_bounded_and_logs_never_autoscroll() -> None:
     assert server.count("scroll=ft.ScrollMode.AUTO") >= 5, (
         f"expected sideway-scrollable rows, found {server.count('scroll=ft.ScrollMode.AUTO')}"
     )
+
+    # Behavioral: EVERY row the gateway lists renders in the tree (the old
+    # viewport showed ~10 of 40+ above the fold of an inner scroll).
+    from screens.server_screen import ServerScreen
+
+    saved = (state.models, state.gateway_running)
+    state.gateway_running = True
+    state.models = [
+        {"id": f"model-{i:02d}", "status": "active", "endpoint_type": "chat.completion"}
+        for i in range(14)
+    ]
+    try:
+        root = _render(ServerScreen)
+        texts = [getattr(n, "value", None) for n in _walk(root) if isinstance(n, ft.Text)]
+        shown = [v for v in texts if isinstance(v, str) and v.startswith("model-")]
+        assert len(shown) == len(state.models), f"only {len(shown)}/{len(state.models)} rows render"
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.models, state.gateway_running = saved
 
 
 def test_console_logging_exists() -> None:
