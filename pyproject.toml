@@ -38,9 +38,6 @@ path = "src"
 color = "#ffffff"
 dark_color = "#0a0a0a"
 
-# Cold start shows a message instead of a blank screen while the gateway
-# spawns (Sherlock/DDGS shape; distinct from the banned legacy
-# [tool.flet.app.boot_screen] key pinned by test_version_sync).
 [tool.flet.boot_screen]
 name = "flet"
 [tool.flet.boot_screen.flet]
@@ -73,9 +70,6 @@ key_alias = "upload"
 [tool.flet.android.gradle_properties]
 "org.gradle.jvmargs" = "-Xmx4G -XX:MaxMetaspaceSize=1G -XX:ReservedCodeCacheSize=512m -XX:+HeapDumpOnOutOfMemoryError"
 
-# Ship runtime code only (app_files implies cleanup.app, verified in flet_cli).
-# Globs run INSIDE the packaged app dir (src/), so repo-root dirs (tests/ etc.)
-# are already outside the package — no app_files entries needed.
 [tool.flet.cleanup]
 app = true
 
@@ -86,11 +80,6 @@ addopts = ["-ra"]
 strict_markers = true
 strict_config = true
 filterwarnings = [
-    # Owner rule: NEVER suppress/ignore warnings. Any warning raised by OUR
-    # code (module-scoped below) escalates to a hard error so it must be
-    # fixed. Third-party warnings are left at default — they stay visible in
-    # pytest's warnings summary on every run, never ignored, but cannot
-    # brick the suite for code we don't own.
     "error:::^(services|screens|components|core|state|tests)(\\.|$)|^(app_shell|main)$",
 ]
 
@@ -99,13 +88,8 @@ line-length = 100
 target-version = "py314"
 
 [tool.ruff.lint]
-# COM812 deliberately omitted: ruff's formatter already enforces trailing
-# commas on split lines, and the rule conflicts with it (ruff warning).
 select = ["E", "F", "W", "I", "UP", "S", "RUF", "SIM105"]
 
 [tool.ruff.lint.per-file-ignores]
-# Tests assert by design; stub excepts are intentional; dummy secrets appear
-# in security-test fixtures on purpose.
 "tests/*" = ["S101", "S105", "S110", "S112"]
-# Prompt copy: line breaks are part of the text the model reads.
 "src/services/router_guide.py" = ["E501"]

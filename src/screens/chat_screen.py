@@ -22,20 +22,21 @@ from state.controller_ctx import ControllerMethodsCtx
 BANNER_AD_EVERY_N_REPLIES = 1
 
 
-def _display_order(messages: list[dict]) -> list[int]:
-    """Original indices in the order rows should appear (DDGS parity).
+def _display_order(messages: list[dict]) -> list[tuple[int, str]]:
+    """(original index, part) rows in the order they should appear.
 
-    The assistant reply is written INTO a placeholder that keeps its
-    original position, while tool results append at the end of the list,
-    so the cards a turn produced landed AFTER the reply they produced.
-    DDGS shows tool cards before the response; move each run of tool rows
-    directly ahead of the assistant/error message it follows.
+    Part is "full", or the "reason"/"body" halves of a reply that produced
+    tool cards. Two owner rules meet here: DDGS parity puts a turn's tool
+    cards BEFORE the reply, and reasoning is ALWAYS the first thing of its
+    turn — so a reply with reasoning splits into three rows:
+    [reasoning] [its tool cards] [answer + usage]. A reply without
+    reasoning keeps the plain order (cards, then reply).
 
     state.messages itself is NEVER reordered: history, regeneration and
     the API payload all read the original order, and reordering it there
     would put tool results before the message that requested them.
     """
-    order: list[int] = []
+    units: list[tuple[int, str]] = []
     i = 0
     total = len(messages)
     while i < total:
@@ -43,18 +44,48 @@ def _display_order(messages: list[dict]) -> list[int]:
             j = i
             while j < total and messages[j].get("role") == "tool":
                 j += 1
-            if order and messages[order[-1]].get("role") in ("assistant", "error"):
-                # Attach the run to the reply it belongs to: reply goes last.
-                reply = order.pop()
-                order.extend(range(i, j))
-                order.append(reply)
+            prev = units[-1] if units else None
+            if (
+                prev is not None
+                and prev[1] == "full"
+                and messages[prev[0]].get("role")
+                in (
+                    "assistant",
+                    "error",
+                )
+            ):
+                reply_index = prev[0]
+                reply = messages[reply_index]
+                if reply.get("role") == "assistant" and str(reply.get("reasoning") or ""):
+                    # Reasoning leads its turn, then the cards, then answer.
+                    units[-1] = (reply_index, "reason")
+                    units.extend((k, "full") for k in range(i, j))
+                    units.append((reply_index, "body"))
+                else:
+                    units.pop()
+                    units.extend((k, "full") for k in range(i, j))
+                    units.append((reply_index, "full"))
             else:
-                order.extend(range(i, j))
+                units.extend((k, "full") for k in range(i, j))
             i = j
         else:
-            order.append(i)
+            units.append((i, "full"))
             i += 1
-    return order
+    return units
+
+
+def _dialog_methods(page):
+    """ControllerMethods for dialogs that run outside the component tree.
+
+    The page stash holds the AppController; the PUBLIC entry points
+    (`edit_last_user`, `delete_message_at`, ...) live on its `.methods`.
+    Calling them on the controller itself raised AttributeError the first
+    time a user opened Edit or confirmed a Delete (owner device log).
+    """
+    controller = getattr(page, "_lmrouter_controller", None)
+    if controller is None:
+        return None
+    return getattr(controller, "methods", controller)
 
 
 def _open_edit_dialog(current_text: str) -> None:
@@ -64,8 +95,8 @@ def _open_edit_dialog(current_text: str) -> None:
         return
     # House escape hatch (DDGS stashes its controller the same way): the
     # dialog runs outside the component tree, so use_context is unavailable.
-    controller = getattr(page, "_lmrouter_controller", None)
-    if controller is None:
+    methods = _dialog_methods(page)
+    if methods is None:
         return
     field = ft.TextField(
         value=current_text,
@@ -77,7 +108,7 @@ def _open_edit_dialog(current_text: str) -> None:
 
     def _submit(_e: ft.ControlEvent) -> None:
         page.pop_dialog()
-        controller.edit_last_user(str(field.value or ""))
+        methods.edit_last_user(str(field.value or ""))
 
     page.show_dialog(
         ft.AlertDialog(
@@ -150,10 +181,11 @@ def _confirm_delete(index: int) -> None:
     controller = getattr(page, "_lmrouter_controller", None)
     if controller is None:
         return
+    methods = _dialog_methods(page)
 
     def _do(_e: object) -> None:
         page.pop_dialog()
-        controller.delete_message_at(index)
+        methods.delete_message_at(index)
 
     page.show_dialog(
         ft.AlertDialog(
@@ -211,8 +243,31 @@ def ChatScreen():
     is_dark_page = app_theme.is_dark_mode(page, state.theme_mode)
 
     # Context usage readout, shown only once a turn has reported tokens.
+    # It lives ABOVE THE COMPOSER, never in the session bar: the owner rule
+    # is that nothing (usage first of all) appears ahead of a turn's
+    # reasoning, and the top bar sits above every message.
     context_label = (
         f"~{state.context_used_tokens / 1000:.1f}k ctx" if state.context_used_tokens > 0 else ""
+    )
+    ctx_chip = (
+        ft.Row(
+            spacing=tokens.SPACE_XS,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            controls=[
+                ft.Icon(
+                    ft.Icons.DATA_SAVER_ON_ROUNDED,
+                    size=tokens.ICON_XS,
+                    color=ft.Colors.PRIMARY,
+                ),
+                ft.Text(
+                    context_label,
+                    size=tokens.FONT_XS,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                ),
+            ],
+        )
+        if context_label
+        else None
     )
 
     session_bar = ft.Row(
@@ -226,26 +281,6 @@ def ChatScreen():
             ft.Container(
                 expand=True,
                 content=SessionBar(state=state, methods=methods, is_dark=is_dark_page),
-            ),
-            (
-                ft.Row(
-                    spacing=tokens.SPACE_XS,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    controls=[
-                        ft.Icon(
-                            ft.Icons.DATA_SAVER_ON_ROUNDED,
-                            size=tokens.ICON_XS,
-                            color=ft.Colors.PRIMARY,
-                        ),
-                        ft.Text(
-                            context_label,
-                            size=tokens.FONT_XS,
-                            color=ft.Colors.ON_SURFACE_VARIANT,
-                        ),
-                    ],
-                )
-                if context_label
-                else ft.Container()
             ),
             (
                 ft.ProgressRing(width=tokens.ICON_XS, height=tokens.ICON_XS, stroke_width=2)
@@ -300,8 +335,8 @@ def ChatScreen():
     )
     is_dark = is_dark_page
     assistant_replies = 0
-    display_order = _display_order(state.messages)
-    for position, index in enumerate(display_order):
+    display_units = _display_order(state.messages)
+    for position, (index, part) in enumerate(display_units):
         message = state.messages[index]
         role = message.get("role", "assistant")
         content = message.get("content", "")
@@ -384,6 +419,26 @@ def ChatScreen():
                 ),
             )
         else:
+            if part == "reason":
+                # Owner rule: reasoning is ALWAYS the first thing of its
+                # turn — its tool cards and usage never ride ahead of it.
+                reasoning_only = str(message.get("reasoning") or "")
+                if reasoning_only:
+                    rows.append(
+                        ft.Column(
+                            spacing=tokens.SPACE_XXS,
+                            controls=[
+                                ThinkingBlock(
+                                    reasoning=reasoning_only,
+                                    streaming=bool(
+                                        state.busy and not content and index == last_index
+                                    ),
+                                    is_dark=is_dark,
+                                ),
+                            ],
+                        )
+                    )
+                continue
             placeholder = not content and state.busy and index == last_index
             body: ft.Control
             if placeholder:
@@ -429,7 +484,9 @@ def ChatScreen():
             assistant_controls: list[ft.Control] = []
             # Reasoning sits ABOVE the answer and collapses itself the moment
             # the answer starts, so it never pushes the reply off-screen.
-            reasoning_text = str(message.get("reasoning") or "")
+            # On the "body" half of a split reply the reasoning row already
+            # rendered BEFORE the tool cards (owner rule: reasoning first).
+            reasoning_text = "" if part == "body" else str(message.get("reasoning") or "")
             if reasoning_text:
                 assistant_controls.append(
                     ThinkingBlock(
@@ -479,7 +536,7 @@ def ChatScreen():
             # ROW (display position, not original index: tool cards reorder
             # ahead of their reply), so the thread always ends on a message.
             if assistant_replies % BANNER_AD_EVERY_N_REPLIES == 0 and position + 1 < len(
-                display_order
+                display_units
             ):
                 rows.append(build_banner_ad())
 
@@ -548,6 +605,22 @@ def ChatScreen():
                 controls=rows,
                 auto_scroll=True,
                 auto_scroll_animation=0,
+            ),
+            *(
+                [
+                    ft.Container(
+                        padding=ft.Padding.symmetric(
+                            horizontal=tokens.SPACE_LG,
+                            vertical=tokens.SPACE_XXS,
+                        ),
+                        content=ft.Row(
+                            alignment=ft.MainAxisAlignment.END,
+                            controls=[ctx_chip],
+                        ),
+                    )
+                ]
+                if ctx_chip is not None
+                else []
             ),
             composer,
         ],

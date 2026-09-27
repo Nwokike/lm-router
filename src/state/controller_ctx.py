@@ -53,10 +53,10 @@ class ControllerMethods:
     stop_retest: Callable[[], None] = _noop
     # settings
     save_settings: Callable[[dict], None] = _noop
-    add_provider: Callable[[dict], None] = _noop
+    add_provider: Callable[[dict], bool] = _noop
     remove_provider: Callable[[str], None] = _noop
     select_provider: Callable[[str], None] = _noop
-    add_mcp_server: Callable[[dict], None] = _noop
+    add_mcp_server: Callable[[dict], bool] = _noop
     remove_mcp_server: Callable[[str], None] = _noop
     toggle_mcp_server: Callable[[str], None] = _noop
     toggle_mcp_tool: Callable[[str, str], None] = _noop

@@ -1355,7 +1355,13 @@ class AppController:
 
         self._run_on_ui(_apply)()
 
-    def _add_mcp_server(self, data: dict) -> None:
+    def _add_mcp_server(self, data: dict) -> bool:
+        """False = rejected (the specific reason was already toasted).
+
+        The screen keys its "MCP server added" snack on this result:
+        toasting success after a rejection told users a broken-URL server
+        existed when nothing had been saved (owner device log).
+        """
         name = str(data.get("name", "")).strip()
         if any(s.name == name for s in self.settings.mcp_servers):
             # Names prefix tool ids (server.tool) — duplicates corrupt the
@@ -1363,24 +1369,25 @@ class AppController:
             self._notify_error(
                 f"MCP server '{name}' already exists.",
             )
-            return
+            return False
         try:
             self.settings.mcp_servers.append(MCPServerConfig(**data))
         except ValidationError as exc:
             msg = self._format_validation_error(exc)
             LOG.warning("invalid mcp server: %s", msg)
             self._notify_error(f"MCP server rejected: {msg}")
-            return
+            return False
         except Exception as exc:
             LOG.warning("invalid mcp server: %s", exc)
             self._notify_error(f"MCP server rejected: {str(exc)[:200]}")
-            return
+            return False
         self.settings.save()
         # The Settings MCP list re-reads only on this snapshot bump — without
         # it, add/remove/toggle saved to disk but the list stayed stale until
         # a tab switch remounted the screen.
         state.settings_version += 1
         self._reapply_mcp()
+        return True
 
     def _remove_mcp_server(self, server_id: str) -> None:
         self.settings.mcp_servers = [s for s in self.settings.mcp_servers if s.id != server_id]
@@ -1536,28 +1543,34 @@ class AppController:
             # and the card immediately shows the new details).
             self._refresh_share_key()
 
-    def _add_provider(self, data: dict) -> None:
+    def _add_provider(self, data: dict) -> bool:
+        """False = rejected (the specific reason was already toasted).
+
+        Same contract as _add_mcp_server: the screen must not toast
+        "Provider added" for a duplicate or an invalid payload.
+        """
         name = str(data.get("name", "")).strip()
         url = str(data.get("base_url", "")).strip().rstrip("/")
         if any(
             p.name == name and str(p.base_url).rstrip("/") == url for p in self.settings.providers
         ):
             self._notify_error(f"Provider '{name}' with this URL already exists.")
-            return
+            return False
         try:
             provider = ProviderConfig(**data)
         except ValidationError as exc:
             msg = self._format_validation_error(exc)
             LOG.warning("invalid provider: %s", msg)
             self._notify_error(f"Provider rejected: {msg}")
-            return
+            return False
         except Exception as exc:
             LOG.warning("invalid provider: %s", exc)
             self._notify_error(f"Provider rejected: {str(exc)[:200]}")
-            return
+            return False
         self.settings.providers.append(provider)
         self.settings.save()
         state.settings_version += 1
+        return True
 
     def _remove_provider(self, provider_id: str) -> None:
         self.settings.providers = [p for p in self.settings.providers if p.id != provider_id]

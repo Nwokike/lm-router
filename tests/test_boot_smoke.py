@@ -637,6 +637,46 @@ def test_mcp_mutators_bump_the_settings_snapshot(boot_page) -> None:
     assert not controller.settings.mcp_servers
 
 
+def test_add_mcp_server_reports_rejection_instead_of_implied_success(boot_page) -> None:
+    """Owner device log: a bad URL was rejected by validation, yet the form
+    toasted 'MCP server added' and nothing showed. The controller must
+    return False on every rejection so the screen can keep the form open."""
+    from main import AppController
+
+    controller = AppController(boot_page)
+    controller.init()
+    boot_page.drain()
+
+    # Space in the host: pydantic rejects it (the exact typo the owner hit).
+    assert (
+        controller.methods.add_mcp_server(
+            {"name": "typo", "transport": "streamable_http", "url": "https://context7. com"}
+        )
+        is False
+    )
+    assert not any(s.name == "typo" for s in controller.settings.mcp_servers)
+
+    # A valid server is accepted, and a duplicate is rejected afterwards.
+    assert (
+        controller.methods.add_mcp_server(
+            {"name": "good", "transport": "streamable_http", "url": "https://ok.test/mcp"}
+        )
+        is True
+    )
+    assert (
+        controller.methods.add_mcp_server(
+            {"name": "good", "transport": "streamable_http", "url": "https://ok.test/mcp"}
+        )
+        is False
+    )
+
+    # Cleanup: never leave test servers in the owner's settings.
+    for server in list(controller.settings.mcp_servers):
+        if server.name == "good":
+            controller.methods.remove_mcp_server(server.id)
+    assert not controller.settings.mcp_servers
+
+
 def test_search_enabled_save_syncs_the_chat_pill_observable(boot_page) -> None:
     """The chat pill reads state.search_enabled, not the settings model —
     the Settings switch used to persist without ever moving the pill."""

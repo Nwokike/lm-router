@@ -263,14 +263,18 @@ def SettingsScreen():
         if not p_name.strip() or not p_url.strip():
             show_snack(page, "Name and base URL are required.")
             return
-        methods.add_provider(
+        if not methods.add_provider(
             {
                 "name": p_name.strip(),
                 "base_url": p_url.strip().rstrip("/"),
                 "api_key": p_key,
                 "models": [],
             },
-        )
+        ):
+            # Rejected: the controller toasted the specific reason. Keep the
+            # form open (with its values) so it can be fixed in place — and
+            # never claim success for something that was not stored.
+            return
         set_p_name("")
         set_p_url("")
         set_p_key("")
@@ -344,7 +348,12 @@ def SettingsScreen():
                     show_snack(page, f"{label} must be a positive number of seconds.")
                     return
                 payload[key] = seconds
-        methods.add_mcp_server(payload)
+        if not methods.add_mcp_server(payload):
+            # Rejected (bad URL, duplicate, validation): the controller
+            # toasted the exact reason. Keep the form open with everything
+            # typed so it can be fixed — never toast "added" for a server
+            # that was never stored (owner device log).
+            return
         set_m_name("")
         set_m_target("")
         set_m_env("")

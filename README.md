@@ -54,24 +54,54 @@
 
 ## Screenshots
 
+### Chat
+
+<p align="center">
+  <img src="screenshots/chat_mcp_dark.jpg" width="90%" alt="Chat with MCP tools" />
+</p>
+<p align="center"><em>MCP tools run mid-conversation: library lookups, an expandable reasoning block and rendered code, all in one thread.</em></p>
+
 <table>
   <tr>
-    <td width="50%"><img src="screenshots/chat.jpg" width="100%" alt="Chat" /></td>
-    <td width="50%"><img src="screenshots/server.jpg" width="100%" alt="Server" /></td>
+    <td width="50%"><img src="screenshots/chat_light.jpg" width="100%" alt="Chat (light)" /></td>
+    <td width="50%"><img src="screenshots/chat_dark.jpg" width="100%" alt="Chat (dark)" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Chat with the auto model, web search and MCP in one session bar.</em></td>
-    <td align="center"><em>Your gateway running on-device, with per-model rate limits and endpoint types.</em></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="screenshots/settings.jpg" width="100%" alt="Settings" /></td>
-    <td width="50%"><img src="screenshots/history.jpg" width="100%" alt="History" /></td>
-  </tr>
-  <tr>
-    <td align="center"><em>Generation controls, gateway behaviour and close-to-background.</em></td>
-    <td align="center"><em>Conversations stay on your device; export to markdown.</em></td>
+    <td align="center"><em>Web search with tool cards and an expandable reasoning block (light).</em></td>
+    <td align="center"><em>The same thread in dark, with the gateway's base URL in the answer.</em></td>
   </tr>
 </table>
+
+### Server
+
+<table>
+  <tr>
+    <td width="50%"><img src="screenshots/server_catalog_light.jpg" width="100%" alt="Model catalog" /></td>
+    <td width="50%"><img src="screenshots/server_share_dark.jpg" width="100%" alt="Sharing" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Model catalog with per-row test actions, rate hints, retest sweeps and the activity log.</em></td>
+    <td align="center"><em>Share the gateway on a public URL any OpenAI client can use, with an optional key.</em></td>
+  </tr>
+</table>
+
+### Settings
+
+<table>
+  <tr>
+    <td width="50%"><img src="screenshots/settings_light.jpg" width="100%" alt="Settings" /></td>
+    <td width="50%"><img src="screenshots/settings_mcp_dark.jpg" width="100%" alt="MCP servers" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>System prompt, gateway behaviour and generation controls.</em></td>
+    <td align="center"><em>Connected MCP servers with per-tool switches, Test and Disable.</em></td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="screenshots/model_picker_light.jpg" width="90%" alt="Model picker" />
+</p>
+<p align="center"><em>Every model with its endpoint type and the gateway's own rate hint.</em></p>
 
 ---
 

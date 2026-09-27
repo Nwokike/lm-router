@@ -961,13 +961,13 @@ def test_tool_cards_render_before_their_reply(_renderer_page) -> None:
     from core.state import state
     from screens.chat_screen import ChatScreen, _display_order
 
-    # Unit: indices, reordered for display, originals preserved.
+    # Unit: (index, part) rows, reordered for display, originals preserved.
     messages = [
         {"role": "user", "content": "search"},
         {"role": "assistant", "content": "Found it: answer"},
         {"role": "tool", "name": "web_search", "content": "results..."},
     ]
-    assert _display_order(messages) == [0, 2, 1]
+    assert _display_order(messages) == [(0, "full"), (2, "full"), (1, "full")]
     # Two turns: each run attaches to its own reply.
     two_turns = [
         {"role": "user", "content": "q1"},
@@ -977,10 +977,30 @@ def test_tool_cards_render_before_their_reply(_renderer_page) -> None:
         {"role": "assistant", "content": "a2"},
         {"role": "tool", "name": "t", "content": "r2"},
     ]
-    assert _display_order(two_turns) == [0, 2, 1, 3, 5, 4]
+    assert _display_order(two_turns) == [
+        (0, "full"),
+        (2, "full"),
+        (1, "full"),
+        (3, "full"),
+        (5, "full"),
+        (4, "full"),
+    ]
     # No tools: identity (a plain chat must be byte-for-byte the same).
     plain = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]
-    assert _display_order(plain) == [0, 1]
+    assert _display_order(plain) == [(0, "full"), (1, "full")]
+    # A reply WITH reasoning splits so reasoning LEADS its turn:
+    # [reasoning] [its cards] [answer] — owner rule, never cards-first.
+    split = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "a", "reasoning": "thinking..."},
+        {"role": "tool", "name": "t", "content": "r"},
+    ]
+    assert _display_order(split) == [
+        (0, "full"),
+        (1, "reason"),
+        (2, "full"),
+        (1, "body"),
+    ]
 
     saved = (state.messages, state.busy, state.gateway_running, state.onboarding_done)
     state.busy = False
@@ -1009,6 +1029,85 @@ def test_tool_cards_render_before_their_reply(_renderer_page) -> None:
         root._detach_observable_subscriptions()
         root._state.mounted = False
         state.messages, state.busy, state.gateway_running, state.onboarding_done = saved
+
+
+def test_reasoning_leads_its_turn_before_the_tool_cards(_renderer_page) -> None:
+    """Owner rule (device conversation): reasoning is ALWAYS the first thing
+    of its turn — neither the tool calls nor usage may appear ahead of it."""
+    from core.state import state
+    from screens.chat_screen import ChatScreen
+
+    saved = (state.messages, state.busy, state.gateway_running, state.onboarding_done)
+    state.busy = False
+    state.gateway_running = True
+    state.onboarding_done = True
+    state.messages = [
+        {"role": "user", "content": "search something"},
+        {
+            "role": "assistant",
+            "content": "THE ANSWER",
+            "reasoning": "THE REASONING",
+            "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+        },
+        {"role": "tool", "name": "web_search", "content": "results..."},
+    ]
+    root = _render(ChatScreen)
+    try:
+        walked = list(_walk_all(root))
+
+        def pos(predicate) -> int:
+            return next(i for i, node in enumerate(walked) if predicate(node))
+
+        reasoning_i = pos(
+            lambda n: (
+                isinstance(n, ft.Text) and getattr(n, "value", None) in ("Reasoning", "Thinking…")
+            )
+        )
+        tool_i = pos(lambda n: isinstance(n, ft.Text) and getattr(n, "value", None) == "web_search")
+        answer_i = pos(
+            lambda n: isinstance(n, ft.Markdown) and getattr(n, "value", None) == "THE ANSWER"
+        )
+        usage_i = pos(
+            lambda n: (
+                isinstance(n, ft.Text)
+                and isinstance(getattr(n, "value", None), str)
+                and "· out" in n.value
+                and "tokens" in n.value
+            )
+        )
+        assert reasoning_i < tool_i < answer_i < usage_i, (
+            f"order wrong: reason@{reasoning_i} tool@{tool_i} answer@{answer_i} usage@{usage_i}"
+        )
+        # The reasoning must appear exactly ONCE (split renders, no dupes).
+        assert (
+            sum(
+                1
+                for n in walked
+                if isinstance(n, ft.Text) and getattr(n, "value", None) == "THE REASONING"
+            )
+            <= 1
+        )
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.messages, state.busy, state.gateway_running, state.onboarding_done = saved
+
+
+def test_dialog_methods_resolves_the_controller_methods() -> None:
+    """Edit & resend and Delete-confirm run outside the component tree and
+    reached for public names on the AppController itself — AttributeError
+    the first time either dialog was used (owner device log)."""
+    from types import SimpleNamespace
+
+    from screens.chat_screen import _dialog_methods
+
+    public = object()
+    page = SimpleNamespace(_lmrouter_controller=SimpleNamespace(methods=public))
+    assert _dialog_methods(page) is public
+    # A stash that already holds the methods object keeps working.
+    page2 = SimpleNamespace(_lmrouter_controller=public)
+    assert _dialog_methods(page2) is public
+    assert _dialog_methods(SimpleNamespace()) is None
 
 
 def test_settings_mcp_dropdown_lists_tools_per_server(
