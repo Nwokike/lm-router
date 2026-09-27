@@ -10,6 +10,8 @@ UPDATE_CONFIG_URL = "https://raw.githubusercontent.com/Nwokike/lm-router/main/ve
 # Must match [tool.flet.android] bundle_id (ng.kiri.lmrouter) or the Play
 # button lands on the wrong/nonexistent listing.
 PLAYSTORE_URL = "https://play.google.com/store/apps/details?id=ng.kiri.lmrouter"
+GITHUB_REPO_URL = "https://github.com/Nwokike/lm-router"
+CONTACT_EMAIL = "hello@kiri.ng"
 DEFAULT_GATEWAY_PORT = 8082
 
 SETTINGS_FILE = "app_settings.json"

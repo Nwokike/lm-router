@@ -1147,14 +1147,21 @@ def test_settings_mcp_dropdown_lists_tools_per_server(
         state.onboarding_done, state.mcp_tools = saved
 
     # The expanded panel (click state cannot be driven by the harness):
-    # live switches, tested fallback, honest empty state, mobile hint.
+    # live switches, tested fallback, honest empty state, mobile copy.
     source = (
         _Path(__file__).resolve().parents[1] / "src" / "screens" / "settings_screen.py"
     ).read_text(encoding="utf-8")
     assert "live_tools_for(" in source
     assert "set_mcp_expanded" in source
     assert "No tools listed yet. Run Test" in source
-    assert "This phone cannot run local (stdio) servers" in source
+    # Platform honesty (KTV idiom): the card and form tell the truth per
+    # device; stdio is not even offered on phones, so the old amber
+    # "This phone cannot run local" warning is gone by construction.
+    assert "mcp_transports" in source
+    assert '"Remote MCP server"' in source
+    assert '"Local or remote MCP server"' in source
+    assert '"Server URL"' in source
+    assert "This phone cannot run local" not in source
     # Owner: a dedicated optional API key field (remote servers), not just
     # hand-written Headers JSON.
     assert 'label="API key (optional)"' in source
@@ -1162,6 +1169,105 @@ def test_settings_mcp_dropdown_lists_tools_per_server(
     # a lone dim line) and the button must be labeled.
     assert '"+ Add provider"' in source
     assert "Keys stay on this device." in source
+    # Family rows (Part B): contact, rate targets, sibling apps, legal.
+    assert "CONTACT_EMAIL" in source
+    assert "mailto:" in source
+    assert "PLAYSTORE_URL" in source
+    assert "GITHUB_REPO_URL" in source
+    assert "kiri.ng/privacy" in source
+    assert "kiri.ng/terms" in source
+    assert "_open_more_apps(" in source
+    assert "Nwokike/ktv-player" in source
+
+
+def test_settings_is_platform_honest_on_mobile(_renderer_page) -> None:
+    """KTV `_is_store_device` idiom: the harness page is ANDROID, so the
+    default rendered Settings must speak PHONE — remote MCP only, and About
+    rows that point a phone at Google Play."""
+    from core.state import state
+    from screens.settings_screen import SettingsScreen
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    saved = state.onboarding_done
+    state.onboarding_done = True
+    try:
+        root = _render(lambda: ControllerMethodsCtx(ControllerMethods(), SettingsScreen))
+        walked = list(_walk_all(root))
+        texts = [
+            getattr(n, "value", None)
+            for n in walked
+            if isinstance(n, ft.Text) and isinstance(getattr(n, "value", None), str)
+        ]
+        blob = " | ".join(texts)
+        # MCP card tells the phone the truth.
+        assert "Remote MCP server" in texts, blob
+        assert "Local or remote MCP server" not in texts, blob
+        # About: the family rows (KTV/DDGS pattern).
+        assert "Contact developer" in texts
+        assert "hello@kiri.ng" in texts
+        assert "Rate 5 stars" in texts
+        assert "Rate us on Google Play" in texts
+        assert "Star us on GitHub" not in texts, "a phone must not see the GitHub rate line"
+        assert "More apps" in texts
+        assert "Sherlock, DDGS, KTV Player" in texts
+        assert "Privacy Policy" in texts
+        assert "Terms of Service" in texts
+        # No licence line (standing owner rule) and the warning is gone.
+        assert not any(t and "cannot run local" in t for t in texts)
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.onboarding_done = saved
+
+
+def test_settings_desktop_keeps_local_and_github_rate(_renderer_page) -> None:
+    """The other half of the swap: on desktop the card offers local + remote
+    and the Rate row points at GitHub."""
+    from core.state import state
+    from screens.settings_screen import SettingsScreen
+    from state.controller_ctx import ControllerMethods, ControllerMethodsCtx
+
+    saved = state.onboarding_done
+    state.onboarding_done = True
+    _renderer_page.platform = ft.PagePlatform.WINDOWS
+    try:
+        root = _render(lambda: ControllerMethodsCtx(ControllerMethods(), SettingsScreen))
+        texts = [
+            getattr(n, "value", None)
+            for n in _walk_all(root)
+            if isinstance(n, ft.Text) and isinstance(getattr(n, "value", None), str)
+        ]
+        assert "Local or remote MCP server" in texts
+        assert "Remote MCP server" not in texts
+        assert "Star us on GitHub" in texts
+        assert "Rate us on Google Play" not in texts
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.onboarding_done = saved
+
+
+def test_is_mobile_page_unit() -> None:
+    """Unknown page or platform -> desktop (stdio stays offered; the
+    service-layer refusal is the backstop)."""
+    from types import SimpleNamespace
+
+    from screens.settings_screen import _is_mobile_page
+
+    assert _is_mobile_page(None) is False
+    assert _is_mobile_page(SimpleNamespace()) is False
+    assert _is_mobile_page(SimpleNamespace(platform=None)) is False
+
+    class _Boom:
+        @property
+        def platform(self):
+            raise RuntimeError("no platform")
+
+    assert _is_mobile_page(_Boom()) is False
+    fake = SimpleNamespace(platform=SimpleNamespace(is_mobile=lambda: True))
+    assert _is_mobile_page(fake) is True
+    fake_desktop = SimpleNamespace(platform=SimpleNamespace(is_mobile=lambda: False))
+    assert _is_mobile_page(fake_desktop) is False
 
 
 def test_reasoning_is_always_first_usage_never_above_it(_renderer_page) -> None:

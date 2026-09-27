@@ -37,6 +37,80 @@ def apply_api_key(headers: dict[str, str], api_key: str) -> dict[str, str]:
     return {**headers, "Authorization": f"Bearer {api_key.strip()}"}
 
 
+def _is_mobile_page(page) -> bool:
+    """One platform probe, KTV's `_is_store_device` idiom: everything
+    downstream (MCP card copy, transport options, rate target) is honest
+    about the device. Unknown page/platform -> False (desktop behavior;
+    the service-layer stdio refusal is still the backstop)."""
+    try:
+        if page is None or not getattr(page, "platform", None):
+            return False
+        return bool(page.platform.is_mobile())
+    except Exception:
+        return False
+
+
+def _open_more_apps(page, methods, is_mobile: bool) -> None:
+    """Sibling apps dialog (the family pattern KTV/DDGS/Sherlock share).
+
+    Each entry opens that app's Play listing on phones and its GitHub repo
+    on desktop, the same swap the Rate row uses."""
+    if page is None:
+        return
+    entries = [
+        ("Sherlock", "ng.kiri.sherlock", "Nwokike/Sherlock"),
+        ("DDGS", "ng.kiri.ddgs", "Nwokike/DDGS"),
+        ("KTV Player", "ng.kiri.ktvplayer", "Nwokike/ktv-player"),
+    ]
+    rows: list[ft.Control] = []
+    for name, play_id, repo in entries:
+        target = (
+            f"https://play.google.com/store/apps/details?id={play_id}"
+            if is_mobile
+            else f"https://github.com/{repo}"
+        )
+        where = "Google Play" if is_mobile else "GitHub"
+        rows.append(
+            ft.Row(
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                controls=[
+                    ft.Column(
+                        spacing=0,
+                        tight=True,
+                        controls=[
+                            ft.Text(name, size=tokens.FONT_BODY_SM),
+                            ft.Text(
+                                where,
+                                size=tokens.FONT_2XS,
+                                color=ft.Colors.ON_SURFACE_VARIANT,
+                            ),
+                        ],
+                    ),
+                    ft.IconButton(
+                        ft.Icons.OPEN_IN_NEW,
+                        icon_size=tokens.ICON_XS,
+                        tooltip=f"Open on {where}",
+                        on_click=lambda _e, url=target: (
+                            page.pop_dialog(),
+                            methods.open_url(url),
+                        ),
+                    ),
+                ],
+            )
+        )
+    page.show_dialog(
+        ft.AlertDialog(
+            modal=True,
+            title=ft.Text("More apps", size=tokens.FONT_TITLE, weight=ft.FontWeight.W_600),
+            content=ft.Container(
+                width=360,
+                content=ft.Column(spacing=tokens.SPACE_SM, controls=rows, tight=True),
+            ),
+            actions=[ft.TextButton("Close", on_click=lambda _: page.pop_dialog())],
+        )
+    )
+
+
 @ft.component
 def SettingsScreen():
     state = ft.use_context(AppStateCtx)
@@ -59,14 +133,11 @@ def SettingsScreen():
     is_dark = theme.is_dark_mode(page, state.theme_mode)
     narrow = bool(page and getattr(page, "width", None) and page.width < 600)
     # Mobile can only reach REMOTE MCP servers: the APK has no subprocess
-    # model for stdio (the connect-time refusal still stands; this hint
-    # warns before the user types a command that can never run here).
-    is_mobile = False
-    try:
-        if page is not None and getattr(page, "platform", None):
-            is_mobile = bool(page.platform.is_mobile())
-    except Exception:
-        is_mobile = False
+    # model for stdio. The card says so, and stdio is not even offered, so
+    # nobody on a phone configures a server they can never start (the
+    # service-layer refusal remains the backstop for saved configs).
+    is_mobile = _is_mobile_page(page)
+    mcp_transports = ["streamable_http", "sse"] + ([] if is_mobile else ["stdio"])
 
     draft_prompt, set_draft_prompt = ft.use_state(settings.system_prompt)
     port_text, set_port_text = ft.use_state(str(settings.gateway_port))
@@ -283,7 +354,12 @@ def SettingsScreen():
 
     def _add_mcp(_: object) -> None:
         if not m_name.strip() or not m_target.strip():
-            show_snack(page, "Name and command or URL are required.")
+            show_snack(
+                page,
+                "Name and URL are required."
+                if is_mobile
+                else "Name and command or URL are required.",
+            )
             return
         headers: dict[str, str] = {}
         if m_headers.strip():
@@ -863,7 +939,7 @@ def SettingsScreen():
                 scroll=ft.ScrollMode.AUTO,
                 controls=[
                     ft.Text(
-                        "Local or remote MCP server",
+                        "Remote MCP server" if is_mobile else "Local or remote MCP server",
                         size=tokens.FONT_SM,
                         color=theme.dim(is_dark),
                     ),
@@ -1092,42 +1168,22 @@ def SettingsScreen():
                 _pad(
                     ft.Dropdown(
                         label="Transport",
-                        value=m_transport,
-                        options=[
-                            ft.DropdownOption(key=t, text=t)
-                            for t in ["streamable_http", "sse", "stdio"]
-                        ],
+                        # stdio is not offered on phones; coerce in case the
+                        # state ever carries it (a platform can't change
+                        # mid-session, but state is cheap to defend).
+                        value=(m_transport if m_transport in mcp_transports else "streamable_http"),
+                        options=[ft.DropdownOption(key=t, text=t) for t in mcp_transports],
                         text_size=tokens.FONT_BODY_SM,
                         on_select=lambda e: set_m_transport(
                             str(e.control.value or "streamable_http")
                         ),
                     ),
                 ),
-                *(
-                    [
-                        _pad(
-                            ft.Container(
-                                padding=ft.Padding.symmetric(
-                                    horizontal=tokens.SPACE_SNUG,
-                                    vertical=tokens.SPACE_SM,
-                                ),
-                                border_radius=tokens.RADIUS_MD,
-                                bgcolor=ft.Colors.with_opacity(tokens.OPACITY_FAINT, theme.WARNING),
-                                content=ft.Text(
-                                    "This phone cannot run local (stdio) servers. "
-                                    "Use streamable_http or sse instead.",
-                                    size=tokens.FONT_2XS,
-                                    color=theme.WARNING,
-                                ),
-                            ),
-                        ),
-                    ]
-                    if is_mobile and m_transport == "stdio"
-                    else []
-                ),
                 _pad(
                     ft.TextField(
-                        label="Command (stdio) or URL (remote)",
+                        # On a phone stdio can't be selected, so the field is
+                        # always a URL; desktop keeps the dual meaning.
+                        label=("Server URL" if is_mobile else "Command (stdio) or URL (remote)"),
                         hint_text=(
                             "e.g. npx -y @modelcontextprotocol/server-everything"
                             if m_transport == "stdio"
@@ -1302,6 +1358,70 @@ def SettingsScreen():
                         else []
                     ),
                 ],
+            ),
+        ),
+        # Family rows (the pattern KTV and DDGS share): contact, rate with
+        # a platform-swapped target, the sibling apps, and the legal links.
+        # No licence line: the owner removed it once, standing rule.
+        ft.Divider(),
+        setting_row(
+            icon=ft.Icons.MAIL_OUTLINE,
+            title="Contact developer",
+            subtitle=constants.CONTACT_EMAIL,
+            stacked=narrow,
+            trailing=ft.IconButton(
+                ft.Icons.OPEN_IN_NEW,
+                icon_size=tokens.ICON_XS,
+                tooltip="Email",
+                on_click=lambda _: methods.open_url(f"mailto:{constants.CONTACT_EMAIL}"),
+            ),
+        ),
+        setting_row(
+            icon=ft.Icons.STAR_ROUNDED,
+            title="Rate 5 stars",
+            subtitle="Rate us on Google Play" if is_mobile else "Star us on GitHub",
+            stacked=narrow,
+            trailing=ft.IconButton(
+                ft.Icons.OPEN_IN_NEW,
+                icon_size=tokens.ICON_XS,
+                tooltip="Open",
+                on_click=lambda _: methods.open_url(
+                    constants.PLAYSTORE_URL if is_mobile else constants.GITHUB_REPO_URL
+                ),
+            ),
+        ),
+        ft.Container(
+            ink=True,
+            on_click=lambda _: _open_more_apps(page, methods, is_mobile),
+            content=setting_row(
+                icon=ft.Icons.APPS_ROUNDED,
+                title="More apps",
+                subtitle="Sherlock, DDGS, KTV Player",
+                stacked=narrow,
+            ),
+        ),
+        setting_row(
+            icon=ft.Icons.PRIVACY_TIP_ROUNDED,
+            title="Privacy Policy",
+            subtitle="kiri.ng/privacy",
+            stacked=narrow,
+            trailing=ft.IconButton(
+                ft.Icons.OPEN_IN_NEW,
+                icon_size=tokens.ICON_XS,
+                tooltip="Open",
+                on_click=lambda _: methods.open_url("https://kiri.ng/privacy"),
+            ),
+        ),
+        setting_row(
+            icon=ft.Icons.GAVEL_ROUNDED,
+            title="Terms of Service",
+            subtitle="kiri.ng/terms",
+            stacked=narrow,
+            trailing=ft.IconButton(
+                ft.Icons.OPEN_IN_NEW,
+                icon_size=tokens.ICON_XS,
+                tooltip="Open",
+                on_click=lambda _: methods.open_url("https://kiri.ng/terms"),
             ),
         ),
     ]
