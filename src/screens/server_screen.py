@@ -11,6 +11,8 @@ from core.catalog import (
     chat_support_note,
     endpoint_label,
     rate_hint_label,
+    rate_tier,
+    rate_tier_style,
     status_label,
 )
 from core.settings import AppSettings
@@ -788,24 +790,49 @@ def ServerScreen():
             ),
         )
         if rate_hint:
+            # Tier chip: soft tint + colored dot + the word the label
+            # already carries. Unknown/absent tier keeps the neutral chip.
+            tier_style = rate_tier_style(rate_tier(m), is_dark)
+            chip_bg, chip_fg = (
+                tier_style
+                if tier_style
+                else (
+                    theme.dim(is_dark),
+                    ft.Colors.with_opacity(tokens.OPACITY_FAINT, theme.dim(is_dark)),
+                )
+            )
+            chip_body: ft.Control = ft.Text(
+                rate_hint,
+                size=tokens.FONT_2XS,
+                color=chip_fg,
+                max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS,
+            )
+            if tier_style:
+                chip_body = ft.Row(
+                    spacing=tokens.SPACE_XXS,
+                    tight=True,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    controls=[
+                        ft.Container(
+                            width=6,
+                            height=6,
+                            border_radius=3,
+                            bgcolor=chip_fg,
+                        ),
+                        chip_body,
+                    ],
+                )
             badges.append(
                 ft.Container(
-                    content=ft.Text(
-                        rate_hint,
-                        size=tokens.FONT_2XS,
-                        color=theme.dim(is_dark),
-                        max_lines=1,
-                        overflow=ft.TextOverflow.ELLIPSIS,
-                    ),
+                    content=chip_body,
                     padding=ft.Padding.symmetric(
                         horizontal=tokens.SPACE_TIGHT,
                         vertical=tokens.SPACE_XXS,
                     ),
                     border_radius=tokens.RADIUS_SM,
-                    bgcolor=ft.Colors.with_opacity(
-                        tokens.OPACITY_FAINT,
-                        theme.dim(is_dark),
-                    ),
+                    bgcolor=chip_bg,
+                    tooltip=rate_hint,
                 ),
             )
         if latency is not None:

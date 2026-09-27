@@ -133,6 +133,48 @@ def rate_hint_label(model: dict[str, Any] | None) -> str:
     return str(hint.get("label") or "").strip()
 
 
+# Gateway tier id -> display word. The gateway label already carries the
+# word (kiri-router R6a); these helpers give every surface the color to
+# match. Pairs are WCAG-AA verified for both themes (soft tint + dark or
+# pastel text, research palette shared with the public site and console).
+_TIER_WORDS = {
+    "high": "High",
+    "medium": "Medium",
+    "low": "Low",
+    "minimal": "Minimal",
+}
+
+RATE_TIER_STYLE: dict[str, tuple[str, str, str, str]] = {
+    # tier: (light bg, light fg, dark bg, dark fg)
+    "high": ("#ECFDF5", "#064E3B", "#04261C", "#6EE7B7"),
+    "medium": ("#FFFBEB", "#78350F", "#291C05", "#FCD34D"),
+    "low": ("#FFF7ED", "#9A3412", "#2B1608", "#FDBA74"),
+    "minimal": ("#FFF1F2", "#9F1239", "#2B0F14", "#FDA4AF"),
+}
+
+
+def rate_tier(model: dict[str, Any] | None) -> str:
+    """Gateway tier id -> display word; '' when absent or unknown.
+
+    An older gateway (tier ids before the rename) falls through to '' and
+    the renderers keep their neutral dim chip: color is an enhancement,
+    never a requirement."""
+    if not model:
+        return ""
+    hint = model.get("rate_hint")
+    if not isinstance(hint, dict):
+        return ""
+    return _TIER_WORDS.get(str(hint.get("tier") or "").strip().lower(), "")
+
+
+def rate_tier_style(tier: str, is_dark: bool) -> tuple[str, str] | None:
+    """(background, foreground) hex pair for a display tier on this theme."""
+    style = RATE_TIER_STYLE.get(str(tier or "").strip().lower())
+    if not style:
+        return None
+    return (style[2], style[3]) if is_dark else (style[0], style[1])
+
+
 def model_label(model: dict[str, Any]) -> str:
     """Picker/row label: the id, with a marker for the rotating model."""
     if not model:

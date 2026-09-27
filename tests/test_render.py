@@ -426,6 +426,56 @@ def test_server_screen_status_words_are_honest(_renderer_page) -> None:
         ) = saved
 
 
+def test_catalog_carries_the_tier_chip_color(_renderer_page) -> None:
+    """Owner ask: rate tiers show WITH color in the catalog. The harness
+    theme is dark, so a High model renders its dark pair: pastel green text
+    on the deep-green tint, with the word the gateway label carries."""
+    from core.state import state
+    from screens.server_screen import ServerScreen
+
+    saved = (state.models, state.gateway_running)
+    state.gateway_running = True
+    state.models = [
+        {
+            "id": "demo-model",
+            "status": "active",
+            "endpoint_type": "chat.completion",
+            "latency_ms": 42,
+            "rate_hint": {
+                "tier": "high",
+                "approx_per_hour": None,
+                "label": "High · No time cap",
+            },
+        },
+        {
+            "id": "plain-model",
+            "status": "active",
+            "endpoint_type": "chat.completion",
+            "rate_hint": {"tier": "", "label": "Some legacy hint"},
+        },
+    ]
+    root = _render(ServerScreen)
+    try:
+        walked = list(_walk_all(root))
+        texts = [n for n in walked if isinstance(n, ft.Text)]
+        tier_text = next(n for n in texts if str(getattr(n, "value", "")).startswith("High ·"))
+        # The harness renders LIGHT: High reads #064E3B on #ECFDF5.
+        assert tier_text.color == "#064E3B", f"High fg wrong: {tier_text.color}"
+        # The tinted chip container sits directly ahead of the text.
+        chip_ahead = [
+            n
+            for n in walked[: walked.index(tier_text)]
+            if isinstance(n, ft.Container) and getattr(n, "bgcolor", None) == "#ECFDF5"
+        ]
+        assert chip_ahead, "the High chip must carry its tint"
+        # A tierless legacy hint keeps the neutral treatment (no wrong color).
+        assert any(str(getattr(n, "value", "")) == "Some legacy hint" for n in texts)
+    finally:
+        root._detach_observable_subscriptions()
+        root._state.mounted = False
+        state.models, state.gateway_running = saved
+
+
 def test_server_header_exposes_the_activity_log_and_notice_is_not_a_banner(
     _renderer_page,
 ) -> None:

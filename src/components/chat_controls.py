@@ -25,6 +25,8 @@ from core.catalog import (
     is_auto,
     model_label,
     rate_hint_label,
+    rate_tier,
+    rate_tier_style,
 )
 
 # Longest model name shown on the strip pill before it is elided. The full
@@ -130,6 +132,7 @@ def ModelPicker(
         caption = endpoint_label(model)
         if hint:
             caption = f"{caption} · {hint}"
+        tier_style = rate_tier_style(rate_tier(model), is_dark)
         items.append(
             ft.PopupMenuItem(
                 content=ft.Row(
@@ -159,7 +162,7 @@ def ModelPicker(
                                 ft.Text(
                                     caption,
                                     size=tokens.FONT_2XS,
-                                    color=theme.dim(is_dark),
+                                    color=tier_style[1] if tier_style else theme.dim(is_dark),
                                     no_wrap=True,
                                     overflow=ft.TextOverflow.ELLIPSIS,
                                 ),

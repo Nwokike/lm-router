@@ -102,6 +102,35 @@ def test_rate_hint_is_surfaced_for_the_user() -> None:
     assert rate_hint_label({"id": "m"}) == ""
 
 
+def test_rate_tier_maps_ids_to_words_and_colors() -> None:
+    """The gateway's tier ids drive every surface's color; the label keeps
+    the word. Unknown ids (a gateway older than the rename) fall back to
+    the neutral chip, never a wrong color."""
+    from core.catalog import rate_tier, rate_tier_style
+
+    def with_tier(tier):
+        return {"rate_hint": {"tier": tier, "label": f"{tier} · x"}}
+
+    assert rate_tier(with_tier("high")) == "High"
+    assert rate_tier(with_tier("medium")) == "Medium"
+    assert rate_tier(with_tier("low")) == "Low"
+    assert rate_tier(with_tier("minimal")) == "Minimal"
+    # absent / unknown / malformed
+    assert rate_tier({"id": "m"}) == ""
+    assert rate_tier(None) == ""
+    assert rate_tier(with_tier("generous")) == ""  # pre-rename gateway
+    assert rate_tier({"rate_hint": "not a dict"}) == ""
+
+    # Theme pairs: same tier reads on light and dark.
+    bg, fg = rate_tier_style("High", is_dark=False)
+    assert (bg, fg) == ("#ECFDF5", "#064E3B")
+    bg, fg = rate_tier_style("High", is_dark=True)
+    assert (bg, fg) == ("#04261C", "#6EE7B7")
+    assert rate_tier_style("Minimal", is_dark=False) == ("#FFF1F2", "#9F1239")
+    assert rate_tier_style("", is_dark=False) is None
+    assert rate_tier_style("unknown", is_dark=True) is None
+
+
 def test_non_active_statuses_are_ineligible() -> None:
     for status in ("untested", "failed", "slow", "rate limited"):
         assert not is_chat_eligible(
