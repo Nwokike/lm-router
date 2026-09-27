@@ -49,11 +49,14 @@ def setting_row(
     subtitle: str = "",
     trailing: ft.Control | None = None,
     stacked: bool = False,
+    on_click=None,
 ) -> ft.Container:
     """One settings row, Sherlock's `_setting_row`.
 
     On a narrow screen (`stacked=True`) the trailing control moves to a second
     line, indented to line up under the text, instead of squeezing the row.
+    `on_click` makes the WHOLE row tappable (KTV/DDGS About pattern), not
+    just the trailing control.
     """
     icon_box = ft.Container(
         content=ft.Icon(icon, size=tokens.ICON_MD, color=ft.Colors.ON_SURFACE_VARIANT),
@@ -117,4 +120,6 @@ def setting_row(
             top=tokens.SPACE_MD,
             bottom=tokens.SPACE_MD,
         ),
+        ink=on_click is not None,
+        on_click=on_click,
     )

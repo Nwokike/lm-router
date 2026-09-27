@@ -1226,6 +1226,8 @@ def test_settings_mcp_dropdown_lists_tools_per_server(
     assert "GITHUB_REPO_URL" in source
     assert "kiri.ng/privacy" in source
     assert "kiri.ng/terms" in source
+    assert "_open_legal_dialog(" in source
+    assert '"Usage agreement & legal"' in source
     assert "_open_more_apps(" in source
     assert "Nwokike/ktv-player" in source
 
@@ -1260,8 +1262,13 @@ def test_settings_is_platform_honest_on_mobile(_renderer_page) -> None:
         assert "Star us on GitHub" not in texts, "a phone must not see the GitHub rate line"
         assert "More apps" in texts
         assert "Sherlock, DDGS, KTV Player" in texts
-        assert "Privacy Policy" in texts
-        assert "Terms of Service" in texts
+        # KTV's legal slot: ONE gavel button (its label is not a walkable
+        # Text in flet 1.0, so the literal is source-pinned below); the two
+        # documents live inside its in-app dialog.
+        assert any(
+            isinstance(n, ft.TextButton) and getattr(n, "icon", None) == ft.Icons.GAVEL_ROUNDED
+            for n in walked
+        )
         # No licence line (standing owner rule) and the warning is gone.
         assert not any(t and "cannot run local" in t for t in texts)
     finally:

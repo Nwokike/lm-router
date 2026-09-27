@@ -50,6 +50,62 @@ def _is_mobile_page(page) -> bool:
         return False
 
 
+def _open_legal_dialog(page, methods) -> None:
+    """KTV's 'Usage Agreement & Legal Terms' slot: ONE button, one in-app
+    dialog. The documents themselves live at kiri.ng (single source of
+    truth; onboarding links there too), so the dialog offers both as rows
+    instead of forking the legal copy into the app."""
+    if page is None:
+        return
+
+    def _doc(title: str, url: str):
+        return ft.Row(
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            controls=[
+                ft.Text(title, size=tokens.FONT_BODY_SM),
+                ft.IconButton(
+                    ft.Icons.OPEN_IN_NEW,
+                    icon_size=tokens.ICON_XS,
+                    tooltip="Open",
+                    on_click=lambda _e, u=url: (
+                        page.pop_dialog(),
+                        methods.open_url(u),
+                    ),
+                ),
+            ],
+        )
+
+    page.show_dialog(
+        ft.AlertDialog(
+            modal=True,
+            title=ft.Text(
+                "Usage agreement & legal",
+                size=tokens.FONT_TITLE,
+                weight=ft.FontWeight.W_600,
+            ),
+            content=ft.Container(
+                width=360,
+                content=ft.Column(
+                    spacing=tokens.SPACE_SM,
+                    tight=True,
+                    controls=[
+                        ft.Text(
+                            "Both documents live at kiri.ng and open in your browser.",
+                            size=tokens.FONT_XS,
+                            color=ft.Colors.ON_SURFACE_VARIANT,
+                        ),
+                        _doc("Privacy Policy", "https://kiri.ng/privacy"),
+                        _doc("Terms of Service", "https://kiri.ng/terms"),
+                    ],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Close", on_click=lambda _: page.pop_dialog()),
+            ],
+        )
+    )
+
+
 def _open_more_apps(page, methods, is_mobile: bool) -> None:
     """Sibling apps dialog (the family pattern KTV/DDGS/Sherlock share).
 
@@ -1369,6 +1425,7 @@ def SettingsScreen():
             title="Contact developer",
             subtitle=constants.CONTACT_EMAIL,
             stacked=narrow,
+            on_click=lambda _: methods.open_url(f"mailto:{constants.CONTACT_EMAIL}"),
             trailing=ft.IconButton(
                 ft.Icons.OPEN_IN_NEW,
                 icon_size=tokens.ICON_XS,
@@ -1381,6 +1438,9 @@ def SettingsScreen():
             title="Rate 5 stars",
             subtitle="Rate us on Google Play" if is_mobile else "Star us on GitHub",
             stacked=narrow,
+            on_click=lambda _: methods.open_url(
+                constants.PLAYSTORE_URL if is_mobile else constants.GITHUB_REPO_URL
+            ),
             trailing=ft.IconButton(
                 ft.Icons.OPEN_IN_NEW,
                 icon_size=tokens.ICON_XS,
@@ -1390,39 +1450,20 @@ def SettingsScreen():
                 ),
             ),
         ),
-        ft.Container(
-            ink=True,
+        setting_row(
+            icon=ft.Icons.APPS_ROUNDED,
+            title="More apps",
+            subtitle="Sherlock, DDGS, KTV Player",
+            stacked=narrow,
             on_click=lambda _: _open_more_apps(page, methods, is_mobile),
-            content=setting_row(
-                icon=ft.Icons.APPS_ROUNDED,
-                title="More apps",
-                subtitle="Sherlock, DDGS, KTV Player",
-                stacked=narrow,
-            ),
         ),
-        setting_row(
-            icon=ft.Icons.PRIVACY_TIP_ROUNDED,
-            title="Privacy Policy",
-            subtitle="kiri.ng/privacy",
-            stacked=narrow,
-            trailing=ft.IconButton(
-                ft.Icons.OPEN_IN_NEW,
-                icon_size=tokens.ICON_XS,
-                tooltip="Open",
-                on_click=lambda _: methods.open_url("https://kiri.ng/privacy"),
-            ),
-        ),
-        setting_row(
+        # KTV's exact legal slot: one divider, one button, one in-app
+        # dialog (the two documents as rows inside it).
+        ft.Divider(),
+        ft.TextButton(
+            "Usage agreement & legal",
             icon=ft.Icons.GAVEL_ROUNDED,
-            title="Terms of Service",
-            subtitle="kiri.ng/terms",
-            stacked=narrow,
-            trailing=ft.IconButton(
-                ft.Icons.OPEN_IN_NEW,
-                icon_size=tokens.ICON_XS,
-                tooltip="Open",
-                on_click=lambda _: methods.open_url("https://kiri.ng/terms"),
-            ),
+            on_click=lambda _: _open_legal_dialog(page, methods),
         ),
     ]
     if page is not None:
