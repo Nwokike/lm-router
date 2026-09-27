@@ -56,11 +56,6 @@
 
 ### Chat
 
-<p align="center">
-  <img src="screenshots/chat_mcp_dark.jpg" width="90%" alt="Chat with MCP tools" />
-</p>
-<p align="center"><em>MCP tools run mid-conversation: library lookups, an expandable reasoning block and rendered code, all in one thread.</em></p>
-
 <table>
   <tr>
     <td width="50%"><img src="screenshots/chat_light.jpg" width="100%" alt="Chat (light)" /></td>
@@ -69,6 +64,14 @@
   <tr>
     <td align="center"><em>Web search with tool cards and an expandable reasoning block (light).</em></td>
     <td align="center"><em>The same thread in dark, with the gateway's base URL in the answer.</em></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="screenshots/chat_mcp_dark.jpg" width="100%" alt="Chat with MCP tools" /></td>
+    <td width="50%"><img src="screenshots/model_picker_light.jpg" width="100%" alt="Model picker" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>MCP tools run mid-conversation: library lookups, reasoning and code in one thread.</em></td>
+    <td align="center"><em>Every model with its endpoint type and the gateway's own rate hint.</em></td>
   </tr>
 </table>
 
@@ -97,11 +100,6 @@
     <td align="center"><em>Connected MCP servers with per-tool switches, Test and Disable.</em></td>
   </tr>
 </table>
-
-<p align="center">
-  <img src="screenshots/model_picker_light.jpg" width="90%" alt="Model picker" />
-</p>
-<p align="center"><em>Every model with its endpoint type and the gateway's own rate hint.</em></p>
 
 ---
 

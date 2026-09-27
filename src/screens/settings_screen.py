@@ -1225,10 +1225,28 @@ def SettingsScreen():
                 wrap=False,
                 scroll=ft.ScrollMode.AUTO,
                 controls=[
-                    ft.Text(
-                        "Remote MCP server" if is_mobile else "Local or remote MCP server",
-                        size=tokens.FONT_SM,
-                        color=theme.dim(is_dark),
+                    # Providers' shape (owner): a bold value heading plus a
+                    # description, so a non-technical user reads WHY before
+                    # the button. The description stays platform-honest:
+                    # phones are never offered a local server.
+                    ft.Column(
+                        spacing=tokens.SPACE_XXS,
+                        tight=True,
+                        expand=True,
+                        controls=[
+                            ft.Text(
+                                "Improve your AI with tools",
+                                size=tokens.FONT_SM,
+                                weight=ft.FontWeight.W_600,
+                            ),
+                            ft.Text(
+                                "Select a server from our list, or add a remote one."
+                                if is_mobile
+                                else "Select a server from our list, or add a local or remote one.",
+                                size=tokens.FONT_XS,
+                                color=theme.dim(is_dark),
+                            ),
+                        ],
                     ),
                     ft.OutlinedButton(
                         "+ Add",

@@ -1208,8 +1208,10 @@ def test_settings_mcp_dropdown_lists_tools_per_server(
     # device; stdio is not even offered on phones, so the old amber
     # "This phone cannot run local" warning is gone by construction.
     assert "mcp_transports" in source
-    assert '"Remote MCP server"' in source
-    assert '"Local or remote MCP server"' in source
+    # Providers-shape header: bold heading + platform-honest description.
+    assert '"Improve your AI with tools"' in source
+    assert '"Select a server from our list, or add a local or remote one."' in source
+    assert '"Select a server from our list, or add a remote one."' in source
     assert '"Server URL"' in source
     assert "This phone cannot run local" not in source
     # Owner: a dedicated optional API key field (remote servers), not just
@@ -1264,8 +1266,9 @@ def test_settings_is_platform_honest_on_mobile(_renderer_page) -> None:
         ]
         blob = " | ".join(texts)
         # MCP card tells the phone the truth.
-        assert "Remote MCP server" in texts, blob
-        assert "Local or remote MCP server" not in texts, blob
+        assert "Improve your AI with tools" in texts, blob
+        assert "Select a server from our list, or add a remote one." in texts, blob
+        assert "local or remote" not in blob.lower(), "a phone must never offer local"
         # About: the family rows (KTV/DDGS pattern).
         assert "Contact developer" in texts
         assert "hello@kiri.ng" in texts
@@ -1306,8 +1309,8 @@ def test_settings_desktop_keeps_local_and_github_rate(_renderer_page) -> None:
             for n in _walk_all(root)
             if isinstance(n, ft.Text) and isinstance(getattr(n, "value", None), str)
         ]
-        assert "Local or remote MCP server" in texts
-        assert "Remote MCP server" not in texts
+        assert "Select a server from our list, or add a local or remote one." in texts
+        assert "Select a server from our list, or add a remote one." not in texts
         assert "Star us on GitHub" in texts
         assert "Rate us on Google Play" not in texts
     finally:
