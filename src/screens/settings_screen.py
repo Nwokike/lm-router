@@ -211,6 +211,10 @@ def _open_catalog_dialog(page, methods, open_manual) -> None:
                     expand=True,
                     controls=[
                         ft.Text(
+                            "Select a server from our list, or add a custom entry.",
+                            size=tokens.FONT_BODY_SM,
+                        ),
+                        ft.Text(
                             "Only connect to services you trust. A server can read "
                             "what your assistant sees.",
                             size=tokens.FONT_2XS,
@@ -219,15 +223,51 @@ def _open_catalog_dialog(page, methods, open_manual) -> None:
                         ft.ListView(
                             spacing=tokens.SPACE_XS,
                             controls=[
-                                *rows,
-                                ft.TextButton(
-                                    "Bring your own server",
-                                    icon=ft.Icons.ADD,
+                                # Manual entry FIRST (owner): the custom path
+                                # must be visible before the gallery, so a
+                                # user who already has a server never scrolls.
+                                ft.Container(
+                                    ink=True,
+                                    border_radius=tokens.RADIUS_SM,
+                                    padding=ft.Padding.symmetric(
+                                        horizontal=tokens.SPACE_SM,
+                                        vertical=tokens.SPACE_XS,
+                                    ),
                                     on_click=lambda _: (
                                         page.pop_dialog(),
                                         open_manual(),
                                     ),
+                                    content=ft.Row(
+                                        spacing=tokens.SPACE_SM,
+                                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                        controls=[
+                                            ft.Icon(
+                                                ft.Icons.ADD_ROUNDED,
+                                                size=tokens.ICON_XS,
+                                                color=theme.PRIMARY,
+                                            ),
+                                            ft.Column(
+                                                spacing=tokens.SPACE_XXS,
+                                                tight=True,
+                                                expand=True,
+                                                controls=[
+                                                    ft.Text(
+                                                        "Bring your own server",
+                                                        size=tokens.FONT_BODY_SM,
+                                                        weight=ft.FontWeight.W_600,
+                                                    ),
+                                                    ft.Text(
+                                                        "Paste a URL or command you already have",
+                                                        size=tokens.FONT_2XS,
+                                                        color=ft.Colors.ON_SURFACE_VARIANT,
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
                                 ),
+                                ft.Divider(height=1),
+                                *rows,
                             ],
                             expand=True,
                         ),
@@ -1192,6 +1232,7 @@ def SettingsScreen():
                     ),
                     ft.OutlinedButton(
                         "+ Add",
+                        tooltip="Pick a server from our list, or add your own",
                         on_click=lambda _: (
                             _open_catalog_dialog(page, methods, lambda: set_mcp_open(True))
                             if page

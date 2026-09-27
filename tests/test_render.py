@@ -1232,6 +1232,11 @@ def test_settings_mcp_dropdown_lists_tools_per_server(
     # the escape hatch, trust note on top, keyed presets get a key sheet.
     assert "_open_catalog_dialog(" in source
     assert '"Bring your own server"' in source
+    assert '"Select a server from our list, or add a custom entry."' in source
+    # Manual entry must be FIRST in the dialog (owner): its row literal
+    # precedes the preset loop in the source.
+    assert source.index('"Bring your own server"') < source.index("*rows,")
+    assert '"Paste a URL or command you already have"' in source
     assert '"No sign-in"' in source
     assert '"Needs key"' in source
     assert "Only connect to services you trust" in source
