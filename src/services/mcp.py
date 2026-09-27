@@ -12,6 +12,7 @@ via threading events; errors and tool schemas are classified for the UI.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import shlex
 import shutil
 import subprocess
@@ -32,6 +33,66 @@ from mcp.client.stdio import get_default_environment
 
 from core.logging import LOG
 from core.settings import AppSettings, MCPServerConfig
+
+# The MCP SDK's ClientSessionGroup._establish_session cleans up with
+# `except Exception` — CANCELLED (our connect timeout) skips it, the
+# half-open stdio/SSE/streamable client generator stays suspended, and its
+# later cross-task GC finalization cancels random tasks' cancel scopes
+# (observed: the agent portal itself died with "cancel scope that isn't
+# the current tasks's current"). Track every client the SDK opens so WE
+# can close it in the task that entered it, immediately, deterministically.
+_PENDING_CLIENTS: list = []
+
+
+class _TrackedClient:
+    """Wraps an SDK client ACM just to remember it until it is closed."""
+
+    def __init__(self, acm) -> None:
+        self._acm = acm
+
+    async def __aenter__(self):
+        value = await self._acm.__aenter__()
+        _PENDING_CLIENTS.append(self)
+        return value
+
+    async def __aexit__(self, *exc_info):
+        try:
+            return await self._acm.__aexit__(*exc_info)
+        finally:
+            with contextlib.suppress(ValueError):
+                _PENDING_CLIENTS.remove(self)
+
+
+def _track_client(factory):
+    def tracked(*args, **kwargs):
+        return _TrackedClient(factory(*args, **kwargs))
+
+    return tracked
+
+
+import mcp as _mcp_pkg  # noqa: E402  (after our local imports: patch last)
+import mcp.client.session_group as _mcp_sg  # noqa: E402
+
+_mcp_pkg.stdio_client = _track_client(_mcp_pkg.stdio_client)
+_mcp_sg.sse_client = _track_client(_mcp_sg.sse_client)
+_mcp_sg.streamable_http_client = _track_client(_mcp_sg.streamable_http_client)
+
+
+async def _drain_pending_clients() -> None:
+    """Close abandoned client generators IN THIS TASK (bounded).
+
+    aclose() at the client's yield makes its anyio scopes unwind in the
+    task that entered them, which is legal; letting GC do it later runs in
+    an arbitrary task, cancels foreign scopes and murders the portal."""
+    while _PENDING_CLIENTS:
+        tracked = _PENDING_CLIENTS.pop()
+        gen = getattr(tracked._acm, "gen", None)
+        if gen is None:
+            continue
+        with contextlib.suppress(BaseException):
+            async with asyncio.timeout(5.0):
+                await gen.aclose()
+
 
 # Hard ceiling on one connect attempt. The MCP SDK defaults are 300s for SSE
 # reads and effectively unbounded for a stdio child that never answers.
@@ -300,9 +361,32 @@ class MCPHub:
                 else:
                     self._status(None)
                 self._reconnect.clear()
-                while not self._stop.is_set() and not self._reconnect.is_set():
-                    # thread-safe wait; never blocks the portal loop
-                    await asyncio.to_thread(self._reconnect.wait, 0.5)
+                try:
+                    while not self._stop.is_set() and not self._reconnect.is_set():
+                        # thread-safe wait; never blocks the owner loop
+                        await asyncio.to_thread(self._reconnect.wait, 0.5)
+                except asyncio.CancelledError as exc:
+                    # A foreign cancel tagged "cancel scope" is an abandoned
+                    # SDK generator's cross-task finalization lashing out;
+                    # swallow it and keep the owner alive. Real teardown
+                    # (untagged cancel, or _stop already set) must propagate.
+                    if self._stop.is_set() or "cancel scope" not in str(exc):
+                        raise
+                    LOG.warning("mcp owner absorbed a foreign cancel; continuing")
+                    await asyncio.sleep(1.0)
+                except Exception as exc:
+                    # Belt: log it, surface it, keep the owner looping —
+                    # an owner death would strand MCP for the whole session.
+                    name = str(exc) or type(exc).__name__
+                    if "shutdown" in name or "closed" in name:
+                        # Interpreter/loop teardown (also: boot-test
+                        # controllers that are never quit): exit quietly.
+                        # Logging here hits a stderr lock held by daemon
+                        # threads and fatally crashes the process.
+                        return
+                    LOG.warning("mcp owner wait failed: %s", name)
+                    self._status(f"MCP error: {name[:150]}")
+                    await asyncio.sleep(1.0)
         finally:
             # Cancellation (portal teardown) must still unwind the entered
             # contexts: they were entered MANUALLY, so they sit on no stack
@@ -310,11 +394,16 @@ class MCPHub:
             # groups and any stdio child processes.
             try:
                 await self._close_owned()
+                await _drain_pending_clients()
             except Exception as exc:
                 LOG.warning("mcp owner cleanup failed: %s", exc)
 
     async def _connect(self) -> None:
         """Connect each enabled server on its own.
+
+        (Historically leaked clients from cancelled connects are drained
+        first: _close_owned has already torn down healthy sessions, so
+        anything still pending is a leak.)
 
         Three real bugs are fixed by not connecting them as one group:
 
@@ -327,6 +416,7 @@ class MCPHub:
         3. A failed connect still reported "connected" downstream.
         """
         await self._close_owned()
+        await _drain_pending_clients()
         servers = [s for s in self.settings.mcp_servers if s.enabled]
         if not servers:
             self.generation += 1
@@ -360,8 +450,23 @@ class MCPHub:
             )
             entered_at = time.monotonic()
             try:
-                tools = await asyncio.wait_for(context.__aenter__(), timeout=CONNECT_TIMEOUT)
+                # asyncio.timeout, NOT wait_for: wait_for runs the await in
+                # an INNER task, so a timeout abandons the SDK's half-entered
+                # anyio scopes in a task that can never legally exit them.
+                # The later cross-task finalization corrupted cancel-scope
+                # state and the owner itself died with "Attempted to exit a
+                # cancel scope that isn't the current tasks's current cancel
+                # scope", taking the whole agent portal (chat, catalog,
+                # everything) with it. Same-task cancel unwinds the SDK
+                # inside THIS task, which anyio allows.
+                async with asyncio.timeout(CONNECT_TIMEOUT):
+                    tools = await context.__aenter__()
             except TimeoutError:
+                # Close the abandoned SDK client HERE, in THIS task (see
+                # _drain_pending_clients): GC finalization of it runs in
+                # another task, cancels foreign cancel scopes and takes the
+                # whole agent portal down with it.
+                await _drain_pending_clients()
                 LOG.warning(
                     "mcp %s timed out after %ss; other servers still load",
                     server.name,
@@ -370,10 +475,10 @@ class MCPHub:
                 failed.append(f"{server.name}: timed out (check your connection)")
                 continue
             except asyncio.CancelledError as exc:
-                # Observed with slow remote servers: wait_for's timeout
-                # cancel makes the SDK's anyio scope unwind as a RAW
-                # CancelledError that never converts to TimeoutError. It
-                # escaped every handler and killed the owner task, taking
+                # The SDK's own anyio scopes can still unwind as a RAW
+                # CancelledError on fast failures (DNS typo, refused port):
+                # it never converts to TimeoutError, escaped every handler,
+                # and used to kill the owner task, taking
                 # MCP down for the whole session. Order matters:
                 # stop request propagates; around OUR deadline it is our
                 # timeout; a FAST failure (DNS typo, refused port) also

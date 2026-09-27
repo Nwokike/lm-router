@@ -604,8 +604,11 @@ class AppController:
         try:
             data = agent.call(fetch)
         except Exception as exc:
-            LOG.warning("model catalog fetch failed: %s", exc)
-            self._notify_error(f"Model catalog unavailable: {str(exc)[:200]}")
+            # Cancellation and some portal errors stringify to ""; a notice
+            # with an empty reason is useless ("unavailable: ").
+            name = str(exc) or type(exc).__name__
+            LOG.warning("model catalog fetch failed: %s", name)
+            self._notify_error(f"Model catalog unavailable: {name[:200]}")
             return
         if not data:
             self._notify_error(
@@ -1313,21 +1316,35 @@ class AppController:
         return with_clock(base, self.settings.tell_model_time)
 
     def _ensure_mcp_owner(self) -> None:
-        """Spawn the MCP owner task unless one is already running.
+        """Spawn the MCP owner on the APP's own event loop.
+
+        It used to be portal-spawned (agent.spawn runs inside the agent
+        portal's anyio task group), which meant ANY escaped owner failure
+        — most importantly the cross-task cancel-scope brick from a
+        cancelled stdio connect — took the whole portal down: chat, the
+        model catalog and every agent call died with it (owner device
+        log,2026-09-27). A plain loop task can only ever hurt itself, and
+        serve() carries its own shields.
 
         Idempotent; called at boot, from every MCP settings mutation (via
-        _reapply_mcp) and after every portal restart (via the agent's
-        on_portal_restart callback). The old future reports done() once its
-        portal died, which is exactly when a respawn is required.
+        _reapply_mcp) and after portal restarts (owner is loop-bound now,
+        so a portal restart never needs a respawn).
         """
         future = self._mcp_future
         if future is not None and not future.done():
             return
+        loop = self._ui_loop
         try:
-            self._mcp_future = self.services.agent.spawn(self.services.mcp.serve)
+            if loop is not None and not loop.is_closed():
+                self._mcp_future = loop.create_task(self.services.mcp.serve)
+            else:
+                # Pre-loop fallback; portal-bound again, but serve() is
+                # shielded (park-loop catches) so the portal stays up.
+                self._mcp_future = self.services.agent.spawn(self.services.mcp.serve)
         except Exception as exc:
-            LOG.warning("mcp owner task not started: %s", exc)
-            self._notify_error(f"MCP subsystem unavailable: {str(exc)[:150]}")
+            name = str(exc) or type(exc).__name__
+            LOG.warning("mcp owner task not started: %s", name)
+            self._notify_error(f"MCP subsystem unavailable: {name[:150]}")
 
     def _reapply_mcp(self) -> None:
         """Signal the MCP owner task (thread-safe, instant).
