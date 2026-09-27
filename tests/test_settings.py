@@ -155,6 +155,34 @@ def test_base_dir_never_anchors_to_the_cwd(tmp_path, monkeypatch) -> None:
     assert storage.base_dir() == absolute
 
 
+def test_temp_dir_is_the_third_storage_leg(tmp_path, monkeypatch) -> None:
+    """Flet's README contract: data / cache / temp. temp is scratch only —
+    FLET_APP_STORAGE_TEMP when the launcher provides it, system temp for
+    bare runs (scratch must never live beside durable data)."""
+    import tempfile
+
+    from core import storage
+
+    # Launcher-provided absolute path is used verbatim (and created).
+    target = tmp_path / "flet-temp"
+    monkeypatch.setenv("FLET_APP_STORAGE_TEMP", str(target))
+    assert storage.temp_dir() == target
+    assert target.is_dir()
+
+    # A relative env value is ignored (same guard as base_dir).
+    monkeypatch.setenv("FLET_APP_STORAGE_TEMP", "relative/path")
+    got = storage.temp_dir()
+    assert got.is_absolute()
+    assert got == Path(tempfile.gettempdir()) / "lm_router"
+    assert got.is_dir()
+
+    # No env at all (bare run): system temp, never ~/.lm_router.
+    monkeypatch.delenv("FLET_APP_STORAGE_TEMP", raising=False)
+    got = storage.temp_dir()
+    assert got == Path(tempfile.gettempdir()) / "lm_router"
+    assert "lm_router" in str(got)
+
+
 def test_live_tools_for_strips_only_its_own_server_prefix() -> None:
     """The dropdown lists ONE server's tools, short-named for the toggle API.
 

@@ -1,7 +1,28 @@
-"""Filesystem locations and atomic JSON persistence."""
+"""Filesystem locations and atomic JSON persistence.
+
+The three storage legs (Flet's `.flet/README.md` contract, honored here):
+
+- **data** (`FLET_APP_STORAGE_DATA`, `base_dir()`): durable. Settings,
+  conversations, their .bak. This is what survives app updates and device
+  backups; anything the user would miss lives ONLY here.
+- **cache** (`FLET_APP_STORAGE_CACHE`, `cache_dir()`): regenerable. The
+  gateway engine snapshot (promoted via an atomic same-directory replace),
+  tokenizer BPE ranks, the rotating log. The OS may purge it on device; it
+  must always be rebuildable.
+- **temp** (`FLET_APP_STORAGE_TEMP`, `temp_dir()`): throwaway scratch.
+  Python's `tempfile` already points here under `flet run`, so any stdlib
+  temp use lands correctly for free. Nothing durable may EVER be written
+  here; the OS can clear it at any moment.
+
+Deliberate non-uses of temp: atomic writes (`.tmp` promotion for JSON and
+the engine) stay in the SAME directory as their target so `os.replace`
+cannot fail across volumes; user exports write straight to the chosen
+destination because that path is the final home, not scratch.
+"""
 
 import json
 import os
+import tempfile
 from pathlib import Path
 
 from . import constants
@@ -43,6 +64,32 @@ def cache_dir() -> Path:
         path.mkdir(parents=True, exist_ok=True)
     except OSError:
         return base_dir()
+    return path
+
+
+def temp_dir() -> Path:
+    """Throwaway scratch space (the README's third leg).
+
+    Under `flet run` / a packaged app this is `FLET_APP_STORAGE_TEMP`
+    (sibling of data and cache, same volume). Bare runs fall back to
+    `<system temp>/lm_router`: scratch must never sit next to durable
+    data, and system temp is exactly as disposable as this contract gets.
+    Degrades to the system temp root if even that cannot be created.
+    """
+    env = os.environ.get("FLET_APP_STORAGE_TEMP")
+    if env:
+        path = Path(env)
+        if path.is_absolute():
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+                return path
+            except OSError:
+                pass
+    path = Path(tempfile.gettempdir()) / "lm_router"
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return Path(tempfile.gettempdir())
     return path
 
 
