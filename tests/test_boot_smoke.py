@@ -637,6 +637,45 @@ def test_mcp_mutators_bump_the_settings_snapshot(boot_page) -> None:
     assert not controller.settings.mcp_servers
 
 
+def test_mcp_owner_ui_loop_spawn_receives_a_coroutine(boot_page) -> None:
+    """Owner device regression (2026-09-27): the loop branch passed the
+    BOUND METHOD serve to create_task (anyio's start_task_soon used to
+    call it for us), so on a real device the owner never started and MCP
+    was dead: 'a coroutine was expected'. Boot tests run without a loop
+    and only exercise the portal fallback, which is why the gate was
+    green — this pins the loop branch itself."""
+    import asyncio as aio
+
+    from main import AppController
+
+    controller = AppController(boot_page)
+    controller.init()
+    boot_page.drain()
+
+    created: list = []
+
+    class _FakeTask:
+        def done(self) -> bool:
+            return False
+
+    class _FakeLoop:
+        def is_closed(self) -> bool:
+            return False
+
+        def create_task(self, coro):
+            assert aio.iscoroutine(coro), f"create_task got {type(coro)!r}, want a coroutine"
+            created.append(coro)
+            return _FakeTask()
+
+    controller._ui_loop = _FakeLoop()
+    controller._mcp_future = None
+    controller._ensure_mcp_owner()
+    assert created, "loop.create_task never called"
+    assert aio.iscoroutine(created[0])
+    created[0].close()  # never awaited; close to avoid a pending-coroutine warning
+    assert controller._mcp_future is not None
+
+
 def test_add_mcp_server_reports_rejection_instead_of_implied_success(boot_page) -> None:
     """Owner device log: a bad URL was rejected by validation, yet the form
     toasted 'MCP server added' and nothing showed. The controller must

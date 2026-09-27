@@ -462,7 +462,13 @@ class AppController:
             return
         if self._log_dirty:
             self._log_dirty = False
-            state.log_version += 1
+            try:
+                state.log_version += 1
+            except RuntimeError:
+                # Page context detached (quit/disconnect): the observable
+                # notify cannot reach a page. Stop the cadence quietly
+                # instead of dying as an unretrieved task exception.
+                return
         self._log_flush_task = None
         if self._log_dirty:
             # Records landed during the window; keep the ~2Hz cadence.
@@ -1336,7 +1342,7 @@ class AppController:
         loop = self._ui_loop
         try:
             if loop is not None and not loop.is_closed():
-                self._mcp_future = loop.create_task(self.services.mcp.serve)
+                self._mcp_future = loop.create_task(self.services.mcp.serve())
             else:
                 # Pre-loop fallback; portal-bound again, but serve() is
                 # shielded (park-loop catches) so the portal stays up.
