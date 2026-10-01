@@ -11,9 +11,12 @@ Turn message protocol (chronological, so tool cards land in order):
 - on_tool(name, text, is_error): a FUNCTION-role result (search, MCP tools)
 - on_done(message, usage): ONLY the final assistant reply (no tool_calls)
 - on_error(kind, text): failures incl. "stopped"
+- on_thought(text): reasoning deltas, retargeted per turn via ensure_kani
+- on_settled(): fires exactly once per turn, even when a callback raised
 """
 
 import asyncio
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -45,6 +48,11 @@ DoneCB = Callable[[Any, dict | None], None]
 ErrorCB = Callable[[str, str], None]
 ToolCB = Callable[[str, str, bool], None]
 ExtraTools = Callable[[], tuple[list, object]]
+
+# Placeholder parked in AgentService._current while a turn is reserved but
+# its portal task is not yet created. Never cancelled, never awaited — the
+# dispatch sites below replace it with the real task handle.
+_TURN_RESERVED: Any = object()
 
 
 def _catalog_row(model_id: str) -> dict | None:
@@ -223,10 +231,19 @@ class AgentService:
         # or changing them silently does nothing for the session.
         self._retry: int | None = None
         self._ctx: int | None = None
+        # Live HTTP resources owned by the current engine: closed via the
+        # portal before the engine is replaced or the portal dies, so model
+        # switches never leak sockets/pools.
+        self._engine_client: Any = None
+        self._engine_http: httpx.AsyncClient | None = None
         # Set by the controller to re-spawn long-lived portal tasks (the MCP
         # owner loop) after a portal restart — without it, a restart silently
         # kills MCP for the rest of the session.
         self.on_portal_restart: Callable[[], None] | None = None
+        # Guards the busy check-then-set in start_turn and the take-and-clear
+        # in stop_turn: two racing callers must not both dispatch, and a
+        # stop must not clear a NEW turn's handle set after it ran.
+        self._turn_lock = threading.Lock()
 
     # lifecycle
 
@@ -240,12 +257,24 @@ class AgentService:
 
     @property
     def busy(self) -> bool:
+        # Read-only: no mutation here. Clearing a finished handle is the
+        # dispatcher's job (finally in _run / stop_turn); a getter that
+        # writes races with the lock-protected reserve path above.
         curr = self._current
         if curr is None:
             return False
-        if hasattr(curr, "done") and curr.done():
-            self._current = None
-            return False
+        if curr is _TURN_RESERVED:
+            return True
+        done = getattr(curr, "done", None)
+        if callable(done):
+            try:
+                if done():
+                    return False
+            except Exception:
+                return True
+            return True
+        # Cancel scopes and other handles without .done() count as busy
+        # until explicitly cleared.
         return True
 
     def start(self) -> None:
@@ -255,7 +284,35 @@ class AgentService:
         self._portal = self._provider.__enter__()
         LOG.info("agent portal started")
 
+    def _close_engine_clients(self) -> None:
+        """Close the current engine's HTTP resources on the portal loop.
+
+        Must run BEFORE the portal dies (aclose on a dead loop raises) and
+        before a replacement engine is installed (or the old pool leaks).
+        Failures are logged, never raised — shutdown paths call this
+        best-effort.
+        """
+        client, http = self._engine_client, self._engine_http
+        self._engine_client, self._engine_http = None, None
+        portal = self._portal
+        if portal is None:
+            return
+        for closer, label in ((client, "openai client"), (http, "http client")):
+            if closer is None:
+                continue
+            close = getattr(closer, "close", None)
+            if close is None:
+                continue
+            try:
+                result = portal.call(close)
+                if asyncio.iscoroutine(result):
+                    # portal.call already awaited it; nothing left to do.
+                    pass
+            except Exception as exc:
+                LOG.debug("engine %s close: %s", label, exc)
+
     def stop(self) -> None:
+        self._close_engine_clients()
         provider, self._provider = self._provider, None
         self._portal = None
         self._current = None
@@ -278,6 +335,12 @@ class AgentService:
                 old.__exit__(None, None, None)
             except Exception as exc:
                 LOG.warning("old portal teardown: %s", exc)
+        # The old engine's httpx pool/transport was created under the dead
+        # portal's loop: reusing it raises "Event loop is closed" or binds a
+        # live client to a dead loop. Force a rebuild on the next turn.
+        self._close_engine_clients()
+        self._kani = None
+        self._model = ""
         self.start()
         LOG.warning("agent portal restarted")
         if self.on_portal_restart is not None:
@@ -357,12 +420,24 @@ class AgentService:
                 engine.on_thought = on_thought
             return self._kani
         history = list(self._kani.chat_history) if self._kani is not None else []
+        # Close the outgoing engine's HTTP resources BEFORE replacing it:
+        # every rebuild otherwise leaks a connection pool on the portal loop.
+        self._close_engine_clients()
         # The reasoning tap is delivered via an attribute rather than a third
         # positional argument so an injected 2-arg engine_factory keeps working.
         self._on_thought = on_thought
         engine = self._engine_factory(self.settings, model)
         if hasattr(engine, "on_thought"):
             engine.on_thought = on_thought
+        # Track the live clients so the next rebuild (or stop/restart) can
+        # close them. openai.AsyncOpenAI owns ._client (an httpx.AsyncClient
+        # subclass) and exposes async .close(); closing it also closes the
+        # pool. Read defensively for injected test engines.
+        sdk_client = getattr(engine, "client", None)
+        inner = getattr(sdk_client, "_client", None)
+        http_client = inner if isinstance(inner, httpx.AsyncClient) else None
+        self._engine_client = sdk_client
+        self._engine_http = http_client
         self._kani = Kani(
             engine,
             system_prompt=system_prompt or None,
@@ -428,13 +503,22 @@ class AgentService:
         if self._portal is None:
             on_error("config", "Agent is not running.")
             return False
-        if self.busy:
-            return False
+        with self._turn_lock:
+            if self.busy:
+                return False
+            # Reserve the turn under the lock: a second caller racing past
+            # the check would otherwise dispatch a parallel _run against the
+            # same chat_history and lose one task handle (uncancellable).
+            self._current = _TURN_RESERVED
         if not state.gateway_running:
+            with self._turn_lock:
+                self._current = None
             on_error("offline", "Gateway is not running. Start it on the Server tab.")
             return False
         kani = self._kani
         if kani is None:
+            with self._turn_lock:
+                self._current = None
             on_error("config", "No model selected.")
             return False
 
@@ -464,9 +548,16 @@ class AgentService:
                 estimated,
                 budget_for_prompt,
             )
+            # One encoding for estimate, budget, and trim: the old
+            # count_tokens(prompt) used the heuristic default while the
+            # other two used the real encoding, inflating the budget and
+            # under-trimming CJK/code by up to 3x.
+            from services.tokenizer import get_encoding_for_model
+
+            shared_encoding, _ = get_encoding_for_model(self._model)
             trimmed, dropped = truncate_history_to_budget(
                 kani.chat_history,
-                budget_tokens=budget_for_prompt - count_tokens(prompt),
+                budget_tokens=budget_for_prompt - count_tokens(prompt, shared_encoding),
                 model=self._model,
             )
             # A tool call and its result are one unit: dropping the call but
@@ -476,6 +567,15 @@ class AgentService:
             kani.chat_history.clear()
             kani.chat_history.extend(trimmed)
             LOG.info("trimmed %d messages from chat history", dropped)
+
+        def _safe_callback(label: str, fn: Callable[[], None]) -> None:
+            # A UI callback raising mid-turn used to abort the async-for and
+            # misreport a local bug as an upstream "error" — possibly AFTER
+            # on_done already fired. Isolate each call; the turn continues.
+            try:
+                fn()
+            except Exception as exc:
+                LOG.warning("turn callback %s failed: %s", label, exc)
 
         async def _run() -> None:
             done_fired = False
@@ -491,16 +591,19 @@ class AgentService:
                     if not is_function:
                         async for chunk in manager:
                             if chunk:
-                                on_delta(chunk)
+                                _safe_callback("on_delta", lambda: on_delta(chunk))
                     message = await manager.message()
                     last_message = message
                     if is_function:
                         if on_tool is not None:
                             is_error = bool(getattr(message, "is_tool_call_error", False))
-                            on_tool(
-                                str(getattr(message, "name", "tool")),
-                                str(getattr(message, "text", "") or ""),
-                                is_error,
+                            _safe_callback(
+                                "on_tool",
+                                lambda: on_tool(
+                                    str(getattr(message, "name", "tool")),
+                                    str(getattr(message, "text", "") or ""),
+                                    is_error,
+                                ),
                             )
                         continue
                     if getattr(message, "tool_calls", None):
@@ -508,48 +611,83 @@ class AgentService:
                         # after the tool results
                         continue
                     done_fired = True
-                    on_done(message, _usage_from(message))
+                    _safe_callback("on_done", lambda: on_done(message, _usage_from(message)))
                 if not done_fired and last_message is not None:
                     # model stopped right after requesting tools; surface what we have
                     done_fired = True
-                    on_done(last_message, _usage_from(last_message))
+                    _safe_callback(
+                        "on_done", lambda: on_done(last_message, _usage_from(last_message))
+                    )
             except asyncio.CancelledError:
-                on_error("stopped", "Generation stopped.")
-                raise
+                # Swallow: re-raising re-enters the anyio task group with a
+                # cancellation — the exact collapse mode the poisoned-portal
+                # test guards against. restart_portal stays a backstop, not
+                # the normal stop path.
+                _safe_callback("on_error", lambda: on_error("stopped", "Generation stopped."))
             except openai.RateLimitError:
-                on_error(
-                    "rate_limited",
-                    rate_limit_advice(self._model, state.models),
+                _safe_callback(
+                    "on_error",
+                    lambda: on_error(
+                        "rate_limited",
+                        rate_limit_advice(self._model, state.models),
+                    ),
                 )
             except openai.AuthenticationError:
-                on_error(
-                    "auth",
-                    "Gateway returned 401. Unknown model, or gateway auth failed.",
+                _safe_callback(
+                    "on_error",
+                    lambda: on_error(
+                        "auth",
+                        "Gateway returned 401. Unknown model, or gateway auth failed.",
+                    ),
                 )
             except openai.PermissionDeniedError:
-                on_error("forbidden", "Access denied by gateway (403).")
+                _safe_callback(
+                    "on_error", lambda: on_error("forbidden", "Access denied by gateway (403).")
+                )
             except openai.NotFoundError:
-                on_error("model", "Model not found on this gateway.")
+                _safe_callback(
+                    "on_error", lambda: on_error("model", "Model not found on this gateway.")
+                )
             except openai.BadRequestError as exc:
                 msg = getattr(exc, "message", str(exc))[:200]
-                on_error("invalid_request", f"Invalid request: {msg}")
+                _safe_callback(
+                    "on_error",
+                    lambda msg=msg: on_error("invalid_request", f"Invalid request: {msg}"),
+                )
             except openai.UnprocessableEntityError:
-                on_error("rejected", "Request rejected by model provider.")
+                _safe_callback(
+                    "on_error",
+                    lambda: on_error("rejected", "Request rejected by model provider."),
+                )
             except openai.APITimeoutError:
-                on_error("timeout", "Gateway request timed out.")
+                _safe_callback(
+                    "on_error", lambda: on_error("timeout", "Gateway request timed out.")
+                )
             except openai.APIConnectionError:
-                on_error("offline", "Gateway unreachable.")
+                _safe_callback("on_error", lambda: on_error("offline", "Gateway unreachable."))
             except openai.APIResponseValidationError:
-                on_error("upstream", "Gateway returned an unparseable response.")
+                _safe_callback(
+                    "on_error",
+                    lambda: on_error("upstream", "Gateway returned an unparseable response."),
+                )
             except openai.InternalServerError:
-                on_error("upstream", "Upstream server error (500). Retrying may help.")
+                _safe_callback(
+                    "on_error",
+                    lambda: on_error("upstream", "Upstream server error (500). Retrying may help."),
+                )
             except openai.APIStatusError as exc:
-                on_error("upstream", f"Upstream HTTP {exc.status_code}")
+                status = exc.status_code
+                _safe_callback(
+                    "on_error",
+                    lambda status=status: on_error("upstream", f"Upstream HTTP {status}"),
+                )
             except Exception as exc:
                 LOG.error("turn failed: %s", exc)
-                on_error("error", str(exc)[:300])
+                detail = str(exc)[:300]
+                _safe_callback("on_error", lambda: on_error("error", detail))
             finally:
-                self._current = None
+                with self._turn_lock:
+                    self._current = None
                 if on_settled is not None:
                     # Fires even when on_done/on_error raised — the controller
                     # uses it to guarantee the UI busy flag clears (forensics R6).
@@ -559,24 +697,32 @@ class AgentService:
                         LOG.warning("turn settled callback failed: %s", exc)
 
         try:
-            self._current = self._portal.start_task_soon(_run)
+            with self._turn_lock:
+                self._current = self._portal.start_task_soon(_run)
         except RuntimeError as exc:
             # A poisoned portal (task-group collapse) used to kill the send
             # worker here: unhandled, no error row, busy stuck True forever.
             LOG.warning("turn dispatch failed (%s); restarting portal once", exc)
             self.restart_portal()
             try:
-                self._current = self._portal.start_task_soon(_run)
+                with self._turn_lock:
+                    self._current = self._portal.start_task_soon(_run)
             except Exception as retry_exc:
                 LOG.error("portal unusable after restart: %s", retry_exc)
+                with self._turn_lock:
+                    self._current = None
                 on_error("config", "Engine crashed. Restart LM Router.")
                 return False
         return True
 
     def stop_turn(self) -> None:
-        current, self._current = self._current, None
-        if current is not None:
-            try:
-                current.cancel()
-            except Exception as exc:
-                LOG.warning("stop failed: %s", exc)
+        with self._turn_lock:
+            current, self._current = self._current, None
+        # The reservation sentinel is not a task: nothing to cancel, and
+        # clearing it above already released the turn.
+        if current is None or current is _TURN_RESERVED:
+            return
+        try:
+            current.cancel()
+        except Exception as exc:
+            LOG.warning("stop failed: %s", exc)

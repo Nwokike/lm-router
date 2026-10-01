@@ -12,8 +12,11 @@ degrades to keyless sources instead of surfacing a traceback.
 
 from __future__ import annotations
 
+import asyncio
+import html
 from typing import Annotated
 
+import httpx
 from kani import AIParam
 from kani.ai_function import AIFunction
 from mcp import ClientSession
@@ -30,9 +33,13 @@ UA = (
 
 MAX_RESULT_CHARS = 8000
 
-# The hosted server exposes these; we pick the search one by prefix so a rename
-# upstream does not silently disable the tool.
-_SEARCH_TOOL_PREFIXES = ("web_search", "search")
+# Bound like the MCP hub's CONNECT_TIMEOUT: a hung hosted endpoint used to
+# hang the tool (and the turn) indefinitely — the hub bounds every connect.
+SEARCH_PRIMARY_TIMEOUT = 20.0
+
+# The hosted server exposes these; substring match survives vendor prefixes
+# (exa_web_search, tavily_search) that a startswith check misses.
+_SEARCH_TOOL_SUBSTRINGS = ("web_search", "search")
 
 
 class SearchRateLimited(RuntimeError):
@@ -40,10 +47,21 @@ class SearchRateLimited(RuntimeError):
 
 
 def _pick_search_tool(tool_names: list[str]) -> str | None:
-    for name in tool_names:
-        if name.lower().startswith(_SEARCH_TOOL_PREFIXES):
+    lowered = [(name, name.lower()) for name in tool_names]
+    for name, low in lowered:
+        if "web_search" in low:
+            return name
+    for name, low in lowered:
+        if "search" in low:
             return name
     return None
+
+
+def _clamp_top_k(top_k: object, default: int = 5) -> int:
+    try:
+        return max(1, min(int(top_k), 10))  # type: ignore[call-overload]
+    except TypeError, ValueError:
+        return default
 
 
 def _render_text(blocks: object) -> str:
@@ -74,27 +92,35 @@ async def run_search(http: HttpService, query: str, top_k: int = 5) -> str:
     """Call the hosted MCP search server with the official SDK client.
 
     `http` is kept for interface symmetry and fallback use; the MCP client
-    manages its own transport.
+    manages its own transport. Provider-side failures RAISE (not return):
+    the fallback loop in run_search_with_fallback must engage instead of
+    stopping at a dead primary.
     """
+    if not str(query or "").strip():
+        raise ValueError("empty search query")
     try:
-        async with streamable_http_client(constants.SEARCH_ENDPOINT) as (read, write, _):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                listed = await session.list_tools()
-                tool = _pick_search_tool([t.name for t in listed.tools])
-                if tool is None:
-                    return (
-                        "Search is unavailable: the provider exposes no search "
-                        f"tool (saw {[t.name for t in listed.tools]})."
+        async with asyncio.timeout(SEARCH_PRIMARY_TIMEOUT):
+            async with streamable_http_client(constants.SEARCH_ENDPOINT) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    listed = await session.list_tools()
+                    tool = _pick_search_tool([t.name for t in listed.tools])
+                    if tool is None:
+                        raise RuntimeError(
+                            "provider exposes no search tool "
+                            f"(saw {[t.name for t in listed.tools]})"
+                        )
+                    result = await session.call_tool(
+                        tool,
+                        {"query": query, "numResults": _clamp_top_k(top_k)},
                     )
-                result = await session.call_tool(
-                    tool,
-                    {"query": query, "numResults": max(1, min(int(top_k), 10))},
-                )
-                if getattr(result, "isError", False):
-                    detail = _render_text(result.content)
-                    return f"Search failed: {detail[:400]}"
-                return _render_text(result.content)
+                    if getattr(result, "isError", False):
+                        detail = _render_text(result.content)
+                        raise RuntimeError(f"provider tool error: {detail[:400]}")
+                    text = _render_text(result.content)
+                    if not text or text == "No results.":
+                        return f"No results for '{query}' from the search provider."
+                    return text
     except SearchRateLimited:
         raise
     except BaseException as exc:
@@ -119,34 +145,38 @@ async def _wikipedia_fallback(http: HttpService, query: str, top_k: int) -> str:
             "action": "query",
             "list": "search",
             "srsearch": query,
-            "srlimit": max(1, min(int(top_k), 10)),
+            "srlimit": _clamp_top_k(top_k),
             "format": "json",
         },
         headers={"User-Agent": UA},
-        timeout=constants.SEARCH_TIMEOUT,
+        timeout=httpx.Timeout(constants.SEARCH_TIMEOUT, connect=5.0),
     )
     if resp.status_code == 429:
         raise SearchRateLimited("Wikipedia rate limited the request.")
     resp.raise_for_status()
     hits = (resp.json().get("query") or {}).get("search") or []
     if not hits:
-        return ""
+        return f"No results for '{query}' on Wikipedia."
     lines = ["Wikipedia results:"]
     for hit in hits:
         title = str(hit.get("title") or "")
         snippet = str(hit.get("snippet") or "")
         snippet = snippet.replace('<span class="searchmatch">', "").replace("</span>", "")
-        lines.append(f"- {title}: {snippet}")
+        snippet = html.unescape(snippet)
+        page = str(hit.get("pageid") or "")
+        url = f" (https://en.wikipedia.org/?curid={page})" if page else ""
+        lines.append(f"- {title}: {snippet}{url}")
     return "\n".join(lines)
 
 
 async def _duckduckgo_fallback(http: HttpService, query: str, top_k: int) -> str:
     """DuckDuckGo's keyless Instant Answer API."""
+    limit = _clamp_top_k(top_k)
     resp = await http.get(
         "https://api.duckduckgo.com/",
         params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
         headers={"User-Agent": UA},
-        timeout=constants.SEARCH_TIMEOUT,
+        timeout=httpx.Timeout(constants.SEARCH_TIMEOUT, connect=5.0),
     )
     if resp.status_code == 429:
         raise SearchRateLimited("DuckDuckGo rate limited the request.")
@@ -154,14 +184,16 @@ async def _duckduckgo_fallback(http: HttpService, query: str, top_k: int) -> str
     payload = resp.json()
     parts: list[str] = []
     abstract = str(payload.get("AbstractText") or "").strip()
+    abstract_url = str(payload.get("AbstractURL") or "").strip()
     if abstract:
-        parts.append(abstract)
+        parts.append(abstract + (f" ({abstract_url})" if abstract_url else ""))
     for topic in payload.get("RelatedTopics") or []:
         text = str(topic.get("Text") or "").strip()
-        if text and len(parts) < int(top_k) + 1:
-            parts.append(f"- {text}")
+        first_url = str(topic.get("FirstURL") or "").strip()
+        if text and len(parts) < limit + 1:
+            parts.append(f"- {text}" + (f" ({first_url})" if first_url else ""))
     if not parts:
-        return ""
+        return f"No results for '{query}' on DuckDuckGo."
     return "DuckDuckGo results:\n" + "\n".join(parts)
 
 
@@ -218,10 +250,11 @@ def build_search_tool(http: HttpService) -> AIFunction:
         cutoff. ALWAYS search first when you are not 100% sure about a tool,
         product, or setup step: research rather than guess, and never assume
         a similar-sounding name is the thing the user meant."""
-        # Do NOT swallow failures into a friendly-sounding string: kani turns a
-        # raised exception into a tool result with is_tool_call_error=True,
-        # which renders as a visible error card in chat (audit D).
-        return await run_search_with_fallback(http, query, top_k)
+        # Fail-soft by design: every backend failure returns an instructive
+        # string ("answer from your own knowledge and say search was
+        # unavailable") instead of raising, so one dead backend never costs
+        # the turn an error card. is_tool_call_error never fires here.
+        return await run_search_with_fallback(http, query, _clamp_top_k(top_k))
 
     return AIFunction(
         web_search,

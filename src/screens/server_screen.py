@@ -164,7 +164,8 @@ def ServerScreen():
             verdict = str(result.get("verdict") or "")
             ms = result.get("ms")
             if verdict == "OK":
-                label, color = f"\u2713 {ms}ms", ft.Colors.GREEN
+                label = f"\u2713 {ms}ms" if ms is not None else "\u2713"
+                color = ft.Colors.GREEN
             elif verdict == "RATE":
                 label, color = "\u2717 rate limited", ft.Colors.AMBER
             elif verdict == "EMPTY":
@@ -217,7 +218,7 @@ def ServerScreen():
                 scroll=ft.ScrollMode.AUTO,
                 controls=[
                     ft.Text(
-                        f"{record['ts']}  {lvl:<7}  {record['msg']}",
+                        f"{record.get('ts', '')}  {lvl:<7}  {record.get('msg', '')}",
                         size=tokens.FONT_SM,
                         font_family="monospace",
                         max_lines=1,
@@ -285,7 +286,9 @@ def ServerScreen():
             summary = (
                 f"{model_counts.get('active', 0)} active"
                 + (
-                    f" · {model_counts.get('degraded', 0)} capped or slow"
+                    # Owner wording: "rate limited" on the surface
+                    # (the wire key stays `degraded`).
+                    f" · {model_counts.get('degraded', 0)} rate limited"
                     if model_counts.get("degraded")
                     else ""
                 )
@@ -757,8 +760,12 @@ def ServerScreen():
 
     model_items: list[ft.Control] = []
     for m in state.models:
-        m_id = m.get("id", "")
-        status = m.get("status", "active").lower()
+        # Gateway JSON is untrusted: a null row or "status": null must be
+        # skipped/guarded, never crash the whole tab.
+        if not isinstance(m, dict):
+            continue
+        m_id = str(m.get("id") or "")
+        status = str(m.get("status") or "active").lower()
         # Spelled out in full ("Chat completion"), not the truncated "chat".
         endpoint = endpoint_label(m)
         rate_hint = rate_hint_label(m)
@@ -798,8 +805,11 @@ def ServerScreen():
                 tier_style
                 if tier_style
                 else (
-                    theme.dim(is_dark),
+                    # Soft tint bg + solid fg (same roles as the styled path):
+                    # the old order was inverted (solid bg, 6% fg) and read
+                    # as a grey pill with near-invisible text.
                     ft.Colors.with_opacity(tokens.OPACITY_FAINT, theme.dim(is_dark)),
+                    theme.dim(is_dark),
                 )
             )
             chip_body: ft.Control = ft.Text(

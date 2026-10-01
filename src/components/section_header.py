@@ -14,7 +14,7 @@ from core import tokens
 def section_header(text: str) -> ft.Container:
     return ft.Container(
         content=ft.Text(
-            text,
+            text.upper(),
             size=tokens.FONT_SM,
             weight=ft.FontWeight.W_700,
             color=ft.Colors.PRIMARY,

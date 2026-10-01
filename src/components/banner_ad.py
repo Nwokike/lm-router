@@ -1,5 +1,7 @@
 """BannerAd builder (Sherlock port): glass card, mobile only, full width."""
 
+import contextlib
+
 import flet as ft
 from flet import Control
 
@@ -43,13 +45,26 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
     if not _HAS_ADS:
         return ft.Container(width=0, height=0)
 
+    # Single construction (a leftover duplicate built the ad twice — double
+    # request, double platform view). The error handler hides the WHOLE
+    # glass card, not just the creative: hiding only the inner holder left
+    # the empty rounded-rectangle chrome in the thread.
+    outer: ft.Row | None = None
+
+    def _on_ad_error(e) -> None:
+        LOG.warning("ads: banner load error: %s", getattr(e, "data", e))
+        if outer is not None:
+            outer.visible = False
+            with contextlib.suppress(Exception):
+                outer.update()
+
     try:
         ad = fta.BannerAd(
             unit_id=constants.AD_BANNER_UNIT_ID_ANDROID,
             width=320,
             height=50,
             on_load=lambda e: LOG.debug("ads: banner loaded"),
-            on_error=lambda e: LOG.warning("ads: banner load error: %s", getattr(e, "data", e)),
+            on_error=_on_ad_error,
         )
     except Exception as exc:
         LOG.warning("ads: banner construction failed: %s", exc)
@@ -58,6 +73,7 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
     # Sherlock styling: an adaptive glass card (low-alpha overlay + hairline
     # border) rather than a flat tonal surface, so it reads as chrome on both
     # the slate dark background and the light one.
+    holder = ft.Container(content=ad, width=320, height=50)
     glass = ft.Container(
         expand=True,
         padding=tokens.SPACE_SM,
@@ -65,10 +81,11 @@ def build_banner_ad(page: ft.Page | None = None) -> Control:
         bgcolor=theme.glass(is_dark),
         border=ft.Border.all(1, theme.border(is_dark)),
         content=ft.Column(
-            [ft.Container(content=ad, width=320, height=50)],
+            [holder],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=tokens.SPACE_XS,
             tight=True,
         ),
     )
-    return ft.Row(controls=[glass], alignment=ft.MainAxisAlignment.CENTER)
+    outer = ft.Row(controls=[glass], alignment=ft.MainAxisAlignment.CENTER)
+    return outer

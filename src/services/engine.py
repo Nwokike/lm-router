@@ -27,8 +27,13 @@ from core.state import state
 from services.netinfo import get_lan_ip
 
 MODULE_NAME = "lm_router_engine"
-VERSION_RE = re.compile(rb'VERSION = "([^"]+)"')
+# Tolerant: an upstream reformat (single quotes, extra spacing) must not brick
+# live fetch and silently strand users on stale cache.
+VERSION_RE = re.compile(rb"""VERSION\s*=\s*["']([^"']+)["']""")
 USER_AGENT = f"LM-Router/{constants.APP_VERSION} (+https://router.kiri.ng)"
+# Cap the live fetch: an unbounded read() lets a compromised/buggy upstream
+# OOM the app. The engine is ~tens of KB; 5MB is generous headroom.
+MAX_ENGINE_BYTES = 5 * 1024 * 1024
 
 
 class EngineUnavailable(RuntimeError):
@@ -47,13 +52,18 @@ def _download(url: str) -> bytes:
     for attempt in range(2):
         try:
             with urllib.request.urlopen(request, timeout=30) as resp:  # noqa: S310
-                return resp.read()
+                data = resp.read(MAX_ENGINE_BYTES + 1)
+                if len(data) > MAX_ENGINE_BYTES:
+                    raise ValueError(f"engine payload exceeds {MAX_ENGINE_BYTES} bytes; refusing")
+                return data
         except Exception as exc:
             last = exc
             if attempt == 0:
                 LOG.warning("engine download failed (%s); retrying once", exc)
                 time.sleep(1.0)
-    raise last  # type: ignore[misc]
+    if last is None:
+        raise EngineUnavailable(f"Could not reach {url}: unknown download failure.")
+    raise last
 
 
 def _validate(data: bytes) -> str:
@@ -98,7 +108,9 @@ def load_engine() -> tuple[object, str]:
     cache = storage.engine_cache_path()
     # MUST end in .py: spec_from_file_location returns None (no loader) for
     # unrecognized suffixes, which would reject even a perfect download.
-    tmp = cache.with_name(cache.stem + ".new.py")
+    # PID-suffixed: two app processes starting together used to truncate
+    # each other's fixed-name tmp.
+    tmp = cache.with_name(f"{cache.stem}.{os.getpid()}.new.py")
     try:
         data = _download(constants.ENGINE_URL)
         version = _validate(data)
@@ -145,6 +157,15 @@ class EngineService:
         self._healthy = False
         self.source = ""
         self.port = 0
+        # Watch generation: stop() bumps it; ticks from an orphaned watcher
+        # (join expired mid-probe) check it before applying, so a stale tick
+        # can never flip gateway_running back on after Stop.
+        self._watch_gen = 0
+        # True while serving an ADOPTED (foreign) gateway: _server stays None
+        # there, so the idempotency guard needs its own flag or a second
+        # start() spawns a duplicate watcher.
+        self._adopted = False
+        self._discover_thread: threading.Thread | None = None
         # Autostart runs on a worker thread while the user may press
         # Start at the same moment. Without this, both call acquire_server
         # on the same port: one wins, the other reports a bind failure —
@@ -208,7 +229,7 @@ class EngineService:
             return self._start_locked()
 
     def _start_locked(self) -> tuple[str, int]:
-        if self._server is not None:
+        if self._server is not None or self._adopted:
             return "started", self.port
         self.load()
         if self._mod is None:
@@ -221,8 +242,10 @@ class EngineService:
         if server is None:
             # Another current-gen gateway already serves this port.
             self.port = port
+            self._adopted = True
             health = self._health(port)
             self._apply_health(health or {})
+            self._healthy = health is not None
 
             def _adopted() -> None:
                 state.gateway_running = health is not None
@@ -235,8 +258,10 @@ class EngineService:
             LOG.info("adopted existing gateway on port %d", port)
             return "adopted", port
 
-        server.access_log = False  # our ring is the UI log
+        with contextlib.suppress(AttributeError):
+            server.access_log = False  # our ring is the UI log
         self._server = server
+        self._adopted = False
         self.port = int(server.server_address[1])
         self._thread = threading.Thread(target=server.serve_forever, name="gateway", daemon=True)
         self._thread.start()
@@ -250,34 +275,61 @@ class EngineService:
         self._ui(_started)
         health = self._health(self.port)
         self._apply_health(health or {})
-        self._healthy = True
+        # A dead-on-arrival bind used to read healthy for ~3s until the
+        # first watch tick corrected it.
+        self._healthy = health is not None
         self._start_watch(self.port)
-        threading.Thread(target=self._warm_discover, daemon=True).start()
+        self._spawn_discover()
         LOG.info("gateway started on port %d (%s)", self.port, self.source)
         return "started", self.port
 
     def stop(self) -> None:
-        self._watch_stop.set()
-        if self._watch_thread is not None:
-            self._watch_thread.join(timeout=2)
-            self._watch_thread = None
-        server, thread = self._server, self._thread
-        self._server = self._thread = None
-        if server is not None:
-            shutdowner = threading.Thread(target=server.shutdown, daemon=True)
-            shutdowner.start()
-            shutdowner.join(timeout=4)
-            server.server_close()
-        self._ui(lambda: setattr(state, "gateway_running", False))
-        self._healthy = False
-        if thread is not None:
-            thread.join(timeout=1)
-        LOG.info("gateway stopped")
+        # Same lock as start: a stop racing a start used to snapshot
+        # server=None just before start assigned it, leaking the thread.
+        with self._lifecycle:
+            self._watch_gen += 1
+            self._watch_stop.set()
+            if self._watch_thread is not None:
+                self._watch_thread.join(timeout=2)
+                if self._watch_thread.is_alive():
+                    LOG.warning("gateway watch thread did not exit in 2s")
+                self._watch_thread = None
+            server, thread = self._server, self._thread
+            self._server = self._thread = None
+            self._adopted = False
+            if server is not None:
+                shutdowner = threading.Thread(target=server.shutdown, daemon=True)
+                shutdowner.start()
+                shutdowner.join(timeout=4)
+                if shutdowner.is_alive():
+                    LOG.warning("gateway shutdown hung past 4s; closing anyway")
+                server.server_close()
+            else:
+                LOG.debug("gateway stop: nothing owned (adopted or never started)")
+            self._ui(lambda: setattr(state, "gateway_running", False))
+            self._healthy = False
+            if thread is not None:
+                thread.join(timeout=1)
+                if thread.is_alive():
+                    LOG.warning("gateway thread did not exit in 1s")
+            LOG.info("gateway stopped")
 
     def refresh_models(self) -> None:
         if self._mod is None:
             raise RuntimeError("engine not loaded")
-        threading.Thread(target=self._safe_discover, kwargs={"force": True}, daemon=True).start()
+        self._spawn_discover(force=True)
+
+    def _spawn_discover(self, force: bool = False) -> None:
+        # One discover at a time: rapid Refresh taps used to run N concurrent
+        # discovers against upstream code of unknown thread-safety.
+        existing = self._discover_thread
+        if existing is not None and existing.is_alive():
+            LOG.debug("catalog discover already running; refresh ignored")
+            return
+        self._discover_thread = threading.Thread(
+            target=self._safe_discover, kwargs={"force": force}, daemon=True
+        )
+        self._discover_thread.start()
 
     def _warm_discover(self) -> None:
         self._safe_discover(force=False)
@@ -298,21 +350,33 @@ class EngineService:
         self._ui(_apply)
 
     def _start_watch(self, port: int) -> None:
+        # Stop any prior watcher before spawning: a re-start after adopt used
+        # to leak a second gateway-watch thread on the same port.
+        self._watch_gen += 1
+        gen = self._watch_gen
+        self._watch_stop.set()
+        if self._watch_thread is not None:
+            self._watch_thread.join(timeout=2)
+            self._watch_thread = None
         self._watch_stop.clear()
         # The watch thread only probes; every state mutation goes through
         # self._ui (the Flet loop scheduler), so no context copy is needed.
         self._watch_thread = threading.Thread(
             target=self._watch,
-            args=(port,),
+            args=(port, gen),
             name="gateway-watch",
             daemon=True,
         )
         self._watch_thread.start()
 
-    def _watch(self, port: int) -> None:
+    def _watch(self, port: int, gen: int) -> None:
         while not self._watch_stop.wait(3.0):
+            if gen != self._watch_gen:
+                return  # superseded by a newer watcher or stop()
             try:
                 health = self._health(port)
+                if gen != self._watch_gen:
+                    return
                 if health is not None:
                     self._apply_health(health)
                     if not self._healthy:

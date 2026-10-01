@@ -109,14 +109,16 @@ class AdService:
             return
         if not self._can_request_ads:
             return
+        # Release the previous preloaded ad first: re-preloading without
+        # this orphaned the old instance in page.services on every call.
+        if self.interstitial is not None:
+            _release_service(self.page.services, self.interstitial)
+            self.interstitial = None
         try:
             ad = fta.InterstitialAd(
                 unit_id=self.interstitial_id,
                 on_load=lambda e: LOG.info("ads: interstitial loaded"),
-                on_error=lambda e: LOG.warning(
-                    "ads: interstitial load error: %s",
-                    getattr(e, "data", e),
-                ),
+                on_error=lambda e: self._handle_preload_error(e),
                 on_close=self._handle_close,
             )
         except Exception as exc:
@@ -126,6 +128,14 @@ class AdService:
         if ad not in self.page.services:
             self.page.services.append(ad)
         LOG.info("ads: interstitial preloaded")
+
+    def _handle_preload_error(self, e) -> None:
+        LOG.warning("ads: interstitial load error: %s", getattr(e, "data", e))
+        # A dead preload must not sit cached: the next show() would burn one
+        # user gesture on a guaranteed show() exception before recovering.
+        if self.interstitial is not None:
+            _release_service(self.page.services, self.interstitial)
+            self.interstitial = None
 
     async def _handle_close(self, e) -> None:
         if self._shown_interstitial is not None:
@@ -157,19 +167,35 @@ class AdService:
             finally:
                 if not self._is_shutting_down:
                     await self.preload_interstitial(on_close=self._on_close_cb)
-        try:
+        # Fresh path cannot know load outcome synchronously (on_load fires
+        # later): report "requested", not "shown". The old `return True`
+        # here claimed success before the ad even loaded.
+        loaded = asyncio.Event()
 
-            async def _show(e) -> None:
+        async def _show(e) -> None:
+            try:
                 await e.control.show()
-                LOG.info("ads: interstitial shown (fresh)")
+            except Exception as exc:
+                LOG.warning("ads: fresh show failed: %s", exc)
+                _release_service(self.page.services, e.control)
+                if self._shown_interstitial is e.control:
+                    self._shown_interstitial = None
+                return
+            LOG.info("ads: interstitial shown (fresh)")
+            loaded.set()
 
+        def _fresh_error(e) -> None:
+            LOG.warning("ads: interstitial load error: %s", getattr(e, "data", e))
+            _release_service(self.page.services, e.control)
+            if self._shown_interstitial is e.control:
+                self._shown_interstitial = None
+            loaded.set()
+
+        try:
             ad = fta.InterstitialAd(
                 unit_id=self.interstitial_id,
                 on_load=lambda e: self.page.run_task(_show, e),
-                on_error=lambda e: LOG.warning(
-                    "ads: interstitial load error: %s",
-                    getattr(e, "data", e),
-                ),
+                on_error=_fresh_error,
                 on_close=self._handle_close,
             )
         except Exception as exc:

@@ -1,7 +1,7 @@
 """Application-wide constants (single source: APP_VERSION)."""
 
 APP_NAME = "LM Router"
-APP_VERSION = "1.0.0"  # synced with pyproject + version.json by tests/test_version_sync.py
+APP_VERSION = "1.1.0"  # synced with pyproject + version.json by tests/test_version_sync.py
 BUILD_NUMBER = 1  # synced with version.json build_number
 
 ENGINE_URL = "https://router.kiri.ng/run.py"

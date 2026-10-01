@@ -18,7 +18,11 @@ class UpdateService:
     @staticmethod
     async def check_for_updates(*, raise_on_error: bool = False) -> dict[str, Any] | None:
         try:
-            async with httpx.AsyncClient(timeout=4.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(4.0, connect=5.0),
+                follow_redirects=True,
+                headers={"User-Agent": f"LM-Router/{constants.APP_VERSION}"},
+            ) as client:
                 resp = await client.get(constants.UPDATE_CONFIG_URL)
                 if resp.status_code == 200:
                     data = resp.json()

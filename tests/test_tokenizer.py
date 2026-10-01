@@ -24,7 +24,7 @@ def _cold_registry(monkeypatch, *, block: bool) -> None:
     """Simulate a cold tiktoken cache (optionally a hanging download)."""
     monkeypatch.setattr(registry, "ENCODINGS", {})
     monkeypatch.setattr(tk_mod, "_loaded", {})
-    monkeypatch.setattr(tk_mod, "_attempted", set())
+    monkeypatch.setattr(tk_mod, "_attempted", {})
     monkeypatch.setattr(tk_mod, "_LOAD_TIMEOUT", 0.2)
 
     if block:

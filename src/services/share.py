@@ -8,6 +8,11 @@ front of it:
 * auth OFF (default) — requests pass straight through;
 * auth ON — a generated `sk-lm-…` key is required as `Authorization: Bearer …`.
 
+SECURITY NOTE: the tunnel leg (device -> localtunnel edge) is plain TCP to a
+third-party relay — the operator and any network observer on that path can
+read proxied bytes. Prefer auth ON, rotate the key after each share, and never
+share anything you would not paste into a public form.
+
 The proxy STREAMS: request bodies (Content-Length or chunked) and response
 bodies are relayed chunk-by-chunk as they arrive, so `stream=true`
 completions reach the client incrementally. The public URL itself comes from
@@ -44,6 +49,9 @@ _HOP_BY_HOP = frozenset(
     },
 )
 _CHUNK = 8 * 1024
+# Largest request body the proxy will buffer (32MB): chat payloads are KBs;
+# anything bigger is a misuse/abuse vector, not a turn.
+MAX_BODY_BYTES = 32 * 1024 * 1024
 
 
 def generate_key() -> str:
@@ -78,8 +86,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         self.send_response(401)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        # Close on reject: staying keep-alive lets scanners brute-force keys
+        # over one cheap connection.
+        self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
+        self.close_connection = True
 
     def _reject_bad_body(self) -> None:
         body = json.dumps({"error": {"message": "Malformed request body."}}).encode()
@@ -96,22 +108,37 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         may arrive chunked — reading only content-length used to forward an
         empty body for the latter.
         """
-        if (self.headers.get("Transfer-Encoding") or "").lower() == "chunked":
+        # Cap buffered bodies: an unbounded read() lets one huge
+        # Content-Length (or endless chunk stream) OOM the proxy.
+        te = (self.headers.get("Transfer-Encoding") or "").lower()
+        if "chunked" in te:
             chunks: list[bytes] = []
+            total = 0
             while True:
                 size_line = self.rfile.readline().strip()
                 if not size_line:
                     break
-                size = int(size_line.split(b";", 1)[0], 16)
+                try:
+                    size = int(size_line.split(b";", 1)[0], 16)
+                except ValueError:
+                    return None
                 if size == 0:
                     while self.rfile.readline().strip():  # trailers
                         pass
                     break
+                total += size
+                if total > MAX_BODY_BYTES:
+                    return None
                 chunks.append(self.rfile.read(size))
                 self.rfile.read(2)  # chunk CRLF
             return b"".join(chunks) or None
-        length = int(self.headers.get("content-length") or 0)
+        try:
+            length = int(self.headers.get("content-length") or 0)
+        except ValueError:
+            return None
         if length:
+            if length > MAX_BODY_BYTES:
+                return None
             return self.rfile.read(length)
         return None
 

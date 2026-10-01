@@ -9,6 +9,10 @@ __all__ = ["AppState", "AppStateCtx", "state"]
 @ft.observable
 class AppState:
     selected_tab: int = 0
+    # Last real NavigationBar tab (0-2). History (3) is a sub-view: opening
+    # it leaves this untouched so the bar keeps highlighting where the user
+    # came from instead of snapping to Chat.
+    last_nav_tab: int = 0
     theme_mode: str = "system"
     offline: bool = False
     onboarding_done: bool = False

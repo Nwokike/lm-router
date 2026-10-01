@@ -109,18 +109,34 @@ class ThoughtTap:
 class _TeeStream(httpx.AsyncByteStream):
     """Pass-through byte stream that scans SSE frames for reasoning."""
 
+    # Bound the scan buffer: a mislabeled non-SSE body held here grows
+    # without cap otherwise. Past the cap, scan-and-drop keeps reasoning
+    # flowing instead of accumulating.
+    MAX_BUFFER = 1024 * 1024
+
     def __init__(self, inner: httpx.AsyncByteStream, tap: ThoughtTap) -> None:
         self._inner = inner
         self._tap = tap
         self._buffer = b""
 
+    def _split_frames(self) -> None:
+        # Frame on both LF and CRLF separators: a strict-CRLF upstream never
+        # contains bare \n\n, so without this the Thinking block pops
+        # all-at-once at end-of-turn instead of live.
+        normalized = self._buffer.replace(b"\r\n", b"\n")
+        if normalized is not self._buffer:
+            self._buffer = normalized
+        while b"\n\n" in self._buffer:
+            frame, self._buffer = self._buffer.split(b"\n\n", 1)
+            self._scan(frame)
+        if len(self._buffer) > self.MAX_BUFFER:
+            self._scan(self._buffer)
+            self._buffer = b""
+
     async def __aiter__(self):
         async for chunk in self._inner:
             self._buffer += chunk
-            # SSE frames are separated by a blank line.
-            while b"\n\n" in self._buffer:
-                frame, self._buffer = self._buffer.split(b"\n\n", 1)
-                self._scan(frame)
+            self._split_frames()
             yield chunk  # unchanged: kani must see the original bytes
         self._scan(self._buffer)
         self._buffer = b""
@@ -187,11 +203,30 @@ def build_thought_client(
     max_retries: int,
     tap: ThoughtTap,
 ) -> httpx.AsyncClient:
-    """An httpx client whose streams are scanned for reasoning."""
+    """An httpx client whose streams are scanned for reasoning.
+
+    House posture that IS mirrored from HttpService: Limits(20/10/30s),
+    trust_env=False (Windows proxy guard for localhost gateway calls), and
+    the versioned User-Agent. NOTE the layering: limits/trust_env MUST ride
+    on the transport — a pre-built transport makes AsyncClient ignore its
+    own limits=/trust_env= (httpx _init_transport returns it as-is). The
+    base_url/api_key/max_retries params are accepted for call-site symmetry
+    with the OpenAI client but belong to THAT layer, not this httpx one.
+    """
+    from core import constants
+
     return httpx.AsyncClient(
-        transport=ThoughtTapTransport(tap),
+        transport=ThoughtTapTransport(
+            tap,
+            limits=httpx.Limits(
+                max_connections=20,
+                max_keepalive_connections=10,
+                keepalive_expiry=30.0,
+            ),
+            trust_env=False,
+        ),
         timeout=timeout,
-        headers={"User-Agent": "LM-Router"},
+        headers={"User-Agent": f"LM-Router/{constants.APP_VERSION}"},
     )
 
 

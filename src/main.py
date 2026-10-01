@@ -61,6 +61,7 @@ class AppController:
         self.services = Services()
         self.methods = ControllerMethods()
         self._url_launcher: object | None = None
+        self._clipboard: ft.Clipboard | None = None
         self.ads: AdService | None = None
         self._stop_requested = False
         self._ui_loop: asyncio.AbstractEventLoop | None = None
@@ -75,6 +76,7 @@ class AppController:
         self._share_url = ""
         self._quitting = False  # run-once guard: on_close + Quit can race
         self._retest_stop: threading.Event | None = None
+        self._retest_gen = 0  # sweep generation: stale finally must not clear flags
         self._back_seq = 0  # route re-key counter for view_pop restores
         # flet page context captured at init: chat callbacks run on the anyio
         # portal thread, which has no context of its own (kani thread study).
@@ -268,6 +270,7 @@ class AppController:
         m.check_update = lambda: self.page.run_task(self._check_update)
         m.open_update_dialog = self._open_update_dialog
         m.open_about = self._open_about
+        m.open_ad_privacy_options = self._open_ad_privacy_options
         m.open_log_terminal = self._open_log_terminal
         m.dismiss_update = self._dismiss_update
 
@@ -497,7 +500,12 @@ class AppController:
                 self._quit_app()
 
     def _set_tab(self, index: int) -> None:
+        # Clamp once at the single setter so every caller (nav bar, header
+        # buttons, deep links) lands on a mounted view by construction.
+        index = index if 0 <= index < 4 else 0
         state.selected_tab = index
+        if index < 3:
+            state.last_nav_tab = index
 
     def _set_theme(self, mode: str) -> None:
         state.theme_mode = mode
@@ -1083,6 +1091,10 @@ class AppController:
         if not rows:
             self._notify_info("Nothing to retest: every model is active.")
             return
+        # Generation counter: sweep A stopping late must not clear sweep B's
+        # flags if the user restarts quickly ( A's finally would clobber B ).
+        self._retest_gen += 1
+        gen = self._retest_gen
         state.retesting = True
         state.retest_progress = (0, len(rows))
         stop = threading.Event()
@@ -1101,7 +1113,7 @@ class AppController:
                 LOG.warning("retest sweep failed: %s", exc)
                 self._in_flet_ctx(self._notify_error)(f"Retest stopped: {str(exc)[:120]}")
             finally:
-                self._in_flet_ctx(self._finish_retest)()
+                self._in_flet_ctx(lambda: self._finish_retest(gen))()
 
         self.page.run_thread(work)
 
@@ -1109,10 +1121,13 @@ class AppController:
         self._apply_test_result(result)
         state.retest_progress = (done, total)
 
-    def _finish_retest(self) -> None:
+    def _finish_retest(self, gen: int | None = None) -> None:
+        # A stale sweep's finally must not clear a newer sweep's flags.
+        if gen is not None and gen != self._retest_gen:
+            return
         state.retesting = False
         state.retest_progress = (0, 0)
-        state.model_testing = frozenset()
+        state.model_testing = set()
         self._retest_stop = None
 
     def _stop_retest(self) -> None:
@@ -1193,12 +1208,17 @@ class AppController:
                     # LocalTunnel calls this from its pump thread, so it must
                     # be marshaled like any other worker write. Without it a
                     # dead relay left its URL on screen looking alive.
+                    # NOTE: the tunnel object keeps retrying (it may recover);
+                    # the banner says "reconnecting", not "closed", and the
+                    # URL stays until an explicit Stop so the UI never claims
+                    # sharing ended while the relay is still serving.
                     LOG.warning("share tunnel error: %s", reason)
 
                     def _apply() -> None:
-                        self._share_url = ""
-                        state.share_url = ""
-                        state.share_error = f"Tunnel closed: {reason}"
+                        if state.share_url:
+                            state.share_error = f"Tunnel reconnecting: {reason}"
+                        else:
+                            state.share_error = f"Tunnel error: {reason}"
 
                     self._in_flet_ctx(_apply)()
 
@@ -1342,7 +1362,13 @@ class AppController:
         loop = self._ui_loop
         try:
             if loop is not None and not loop.is_closed():
-                self._mcp_future = loop.create_task(self.services.mcp.serve())
+                # Thread-safe scheduling from ANY caller: run_coroutine_
+                # threadsafe marshals onto the loop whether we are on it or
+                # on a foreign thread (notably the agent-portal restart
+                # callback) — loop.create_task from a foreign thread is
+                # undefined behaviour. The returned future completes with
+                # the owner task, so existing join logic is unaffected.
+                self._mcp_future = asyncio.run_coroutine_threadsafe(self.services.mcp.serve(), loop)
             else:
                 # Pre-loop fallback; portal-bound again, but serve() is
                 # shielded (park-loop catches) so the portal stays up.
@@ -1763,19 +1789,20 @@ class AppController:
             self._new_conversation()
 
     def _copy_text(self, text: str) -> None:
+        # One shared Clipboard for the app's lifetime: per-call appends grew
+        # page.services without bound, and the raw show_dialog(SnackBar) below
+        # raised "Dialog is already opened" whenever copy ran from inside
+        # another dialog (e.g. the log terminal) — the copy succeeded but the
+        # user was told it failed.
         try:
-            clipboard = ft.Clipboard()
-            self.page.services.append(clipboard)
+            if self._clipboard is None:
+                self._clipboard = ft.Clipboard()
+                self.page.services.append(self._clipboard)
+            clipboard = self._clipboard
 
             async def _copy() -> None:
                 await clipboard.set(text)
-                self.page.show_dialog(
-                    ft.SnackBar(
-                        content=ft.Text("Copied to clipboard"),
-                        behavior=ft.SnackBarBehavior.FLOATING,
-                        duration=1500,
-                    ),
-                )
+                show_snack(self.page, "Copied to clipboard")
 
             self.page.run_task(_copy)
         except Exception as exc:
@@ -1852,6 +1879,27 @@ class AppController:
         except Exception as exc:
             LOG.warning("about dialog failed: %s", exc)
             self._notify_error(f"Could not open app details: {str(exc)[:120]}")
+
+    def _open_ad_privacy_options(self) -> None:
+        """GDPR entry point: the UMP privacy-options form when required."""
+        ads = self.ads
+        if ads is None:
+            self._notify_info("Ads are not available in this build.")
+            return
+
+        async def _show() -> None:
+            outcome = await ads.show_privacy_options()
+            if outcome == "not_required":
+                self._notify_info("No additional ad privacy choices are required.")
+            elif outcome == "no_manager":
+                self._notify_info("Consent manager is not ready yet.")
+            elif outcome != "form_shown":
+                self._notify_error(f"Privacy options unavailable: {outcome[:120]}")
+
+        try:
+            self.page.run_task(_show)
+        except Exception as exc:
+            LOG.warning("privacy options failed: %s", exc)
 
     def _open_update_dialog(self) -> None:
         if not state.update_info:
@@ -2075,11 +2123,14 @@ class AppController:
 
     # --- teardown ----------------------------------------------------------
 
-    def _quit_app(self) -> None:
+    def _quit_app(self, e: object = None) -> None:
         # Idempotent: on_close, the Quit button and the back-at-root path can
         # race. Gateway shutdown joins up to ~7s — keep it off the UI thread
         # (forensics R8); window teardown runs in the Flet context. Ordered so
-        # every resource dies before the loop that owns it.
+        # every resource dies before the loop that owns it. The event arg is
+        # accepted (defaulting to None) because page.on_close invokes the
+        # handler WITH a payload — a zero-arg method raises TypeError on
+        # exactly the framework-initiated close path.
         if self._quitting:
             return
         self._quitting = True
@@ -2109,15 +2160,18 @@ class AppController:
             except Exception as exc:
                 LOG.warning("agent shutdown: %s", exc)
             try:
+                # Share proxy + tunnel outlived quit: daemon threads die with
+                # the process, but the session must be marked stopped first.
+                # Stop the share BEFORE the engine: the proxy fronts the
+                # gateway, and stopping the engine first leaves a window
+                # where the tunnel serves 502s with no UI left to stop it.
+                self._in_flet_ctx(self._stop_share)()
+            except Exception as exc:
+                LOG.debug("share shutdown: %s", exc)
+            try:
                 self.services.engine.stop()
             except Exception as exc:
                 LOG.warning("gateway shutdown: %s", exc)
-            try:
-                # Share proxy + tunnel outlived quit: daemon threads die with
-                # the process, but the session must be marked stopped first.
-                self._stop_share()
-            except Exception as exc:
-                LOG.debug("share shutdown: %s", exc)
             self._in_flet_ctx(self._finish_quit)()
 
         self.page.run_thread(work)
@@ -2130,7 +2184,9 @@ class AppController:
             ads = self.ads
             if ads is not None:
                 try:
-                    await ads.close()
+                    # Bounded: a hung ad SDK must never wedge quit with the
+                    # _quitting latch already set (no retry possible).
+                    await asyncio.wait_for(ads.close(), timeout=5)
                 except Exception as exc:
                     LOG.debug("ad close: %s", exc)
             self._destroy_window()
@@ -2139,6 +2195,12 @@ class AppController:
             self.page.run_task(_close_then_destroy)
         except Exception as exc:
             LOG.warning("quit failed: %s", exc)
+            # Last resort: the run_task dispatch itself failed with the
+            # latch already set, so still attempt window teardown directly.
+            try:
+                self._destroy_window()
+            except Exception as destroy_exc:
+                LOG.warning("quit teardown failed: %s", destroy_exc)
 
     def _destroy_window(self) -> None:
         # Re-enable the close guard first so destroy is never intercepted.

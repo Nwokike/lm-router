@@ -138,6 +138,8 @@ def conversation_path(conversation_id: str) -> Path:
     # Allowlist (DDGS port): ids are uuid4 hex today, but nothing downstream
     # should ever be able to escape the conversations directory.
     safe = "".join(ch for ch in str(conversation_id) if ch.isalnum() or ch in "_-")
+    if not safe:
+        raise ValueError("conversation id is empty after sanitizing")
     return storage.conversations_dir() / f"{safe}.json"
 
 
@@ -168,7 +170,18 @@ def save_conversation(agent: AgentService) -> bool:
         # otherwise flip kani to its ZIP format silently (it infers format
         # from the suffix). .tmp also keeps leftovers out of the *.json glob.
         agent.kani.save(str(tmp), save_format="json")
+        with contextlib.suppress(OSError):
+            os.chmod(tmp, 0o600)
+        if state.active_conversation in _tombstones:
+            # Re-check AFTER the write: clear_all ran while kani.save was in
+            # flight. Replacing now would resurrect a deleted chat.
+            LOG.debug("dropping save of %s: deleted mid-write", state.active_conversation)
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
+            return True
         os.replace(tmp, path)
+        with contextlib.suppress(OSError):
+            os.chmod(path, 0o600)
     except Exception as exc:
         LOG.warning("conversation save failed: %s", exc)
         with contextlib.suppress(OSError):
@@ -237,6 +250,8 @@ def messages_from_history(agent: AgentService) -> list[dict]:
         text = str(getattr(message, "text", "") or "")
         if not text:
             continue
+        if "system" in role:
+            continue  # kani preamble: never project as an assistant turn
         if "user" in role:
             messages.append({"role": "user", "content": text})
         elif "function" in role:
@@ -329,6 +344,8 @@ def export_conversation_markdown(conversation_id: str) -> tuple[str, str]:
         content = msg.get("content") or msg.get("text") or ""
         if not content:
             continue
+        if "system" in role:
+            continue
         if "user" in role:
             lines.extend(["### User", "", str(content).strip(), ""])
         elif "function" in role:
@@ -351,7 +368,8 @@ def export_conversation_json(conversation_id: str) -> tuple[str, str]:
 
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except OSError, ValueError:
+        # ValueError covers UnicodeDecodeError on non-UTF-8 bytes (M1 rule).
         return "{}", "conversation.json"
 
     title = _title_from_file(path)

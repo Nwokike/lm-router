@@ -289,21 +289,25 @@ def _open_legal_dialog(page, methods) -> None:
     if page is None:
         return
 
+    def _open_doc(url: str) -> None:
+        page.pop_dialog()
+        methods.open_url(url)
+
     def _doc(title: str, url: str):
-        return ft.Row(
-            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            controls=[
-                ft.Text(title, size=tokens.FONT_BODY_SM),
-                ft.IconButton(
-                    ft.Icons.OPEN_IN_NEW,
-                    icon_size=tokens.ICON_XS,
-                    tooltip="Open",
-                    on_click=lambda _e, u=url: (
-                        page.pop_dialog(),
-                        methods.open_url(u),
-                    ),
-                ),
-            ],
+        # Whole-row tap (setting_row rule): the old bare Row left only the
+        # 14px icon tappable.
+        return ft.Container(
+            ink=True,
+            border_radius=tokens.RADIUS_SM,
+            padding=ft.Padding.symmetric(horizontal=tokens.SPACE_SM, vertical=tokens.SPACE_XS),
+            on_click=lambda _e, u=url: _open_doc(u),
+            content=ft.Row(
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                controls=[
+                    ft.Text(title, size=tokens.FONT_BODY_SM),
+                    ft.Icon(ft.Icons.OPEN_IN_NEW, size=tokens.ICON_XS),
+                ],
+            ),
         )
 
     page.show_dialog(
@@ -349,6 +353,11 @@ def _open_more_apps(page, methods, is_mobile: bool) -> None:
         ("DDGS", "ng.kiri.ddgs", "Nwokike/DDGS"),
         ("KTV Player", "ng.kiri.ktvplayer", "Nwokike/ktv-player"),
     ]
+
+    def _open_app(target: str) -> None:
+        page.pop_dialog()
+        methods.open_url(target)
+
     rows: list[ft.Control] = []
     for name, play_id, repo in entries:
         target = (
@@ -358,31 +367,30 @@ def _open_more_apps(page, methods, is_mobile: bool) -> None:
         )
         where = "Google Play" if is_mobile else "GitHub"
         rows.append(
-            ft.Row(
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                controls=[
-                    ft.Column(
-                        spacing=0,
-                        tight=True,
-                        controls=[
-                            ft.Text(name, size=tokens.FONT_BODY_SM),
-                            ft.Text(
-                                where,
-                                size=tokens.FONT_2XS,
-                                color=ft.Colors.ON_SURFACE_VARIANT,
-                            ),
-                        ],
-                    ),
-                    ft.IconButton(
-                        ft.Icons.OPEN_IN_NEW,
-                        icon_size=tokens.ICON_XS,
-                        tooltip=f"Open on {where}",
-                        on_click=lambda _e, url=target: (
-                            page.pop_dialog(),
-                            methods.open_url(url),
+            # Whole-row tap (setting_row rule): only the icon was tappable.
+            ft.Container(
+                ink=True,
+                border_radius=tokens.RADIUS_SM,
+                padding=ft.Padding.symmetric(horizontal=tokens.SPACE_SM, vertical=tokens.SPACE_XS),
+                on_click=lambda _e, url=target: _open_app(url),
+                content=ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    controls=[
+                        ft.Column(
+                            spacing=0,
+                            tight=True,
+                            controls=[
+                                ft.Text(name, size=tokens.FONT_BODY_SM),
+                                ft.Text(
+                                    where,
+                                    size=tokens.FONT_2XS,
+                                    color=ft.Colors.ON_SURFACE_VARIANT,
+                                ),
+                            ],
                         ),
-                    ),
-                ],
+                        ft.Icon(ft.Icons.OPEN_IN_NEW, size=tokens.ICON_XS),
+                    ],
+                ),
             )
         )
     page.show_dialog(
@@ -411,9 +419,34 @@ def SettingsScreen():
     # touches disk; calling it in the render body re-read the file on every
     # keystroke and every log bump.
     settings, set_settings = ft.use_state(lambda: AppSettings.load())
-    # Re-read only when the controller says settings changed.
+
+    # Re-read only when the controller says settings changed — and re-sync
+    # every derived draft with it. Without this, an external settings change
+    # (toggle from another surface, disk reload) left stale field values.
+    def _reload_settings() -> None:
+        fresh = AppSettings.load()
+        set_settings(fresh)
+        set_draft_prompt(fresh.system_prompt)
+        set_port_text(str(fresh.gateway_port))
+        set_autostart(fresh.gateway_autostart)
+        set_keep_running(fresh.keep_running_when_closed)
+        set_search_on(fresh.search_enabled)
+        set_gen_temperature(f"{fresh.temperature:g}")
+        set_gen_top_p(f"{fresh.top_p:g}")
+        set_gen_max_tokens(str(fresh.max_reply_tokens))
+        set_gen_presence(f"{fresh.presence_penalty:g}")
+        set_gen_frequency(f"{fresh.frequency_penalty:g}")
+        set_gen_context(str(fresh.max_context_tokens))
+        set_gen_tool_rounds(str(fresh.tool_max_rounds))
+        set_gen_tool_retries(str(fresh.tool_retry_attempts))
+        set_gen_reasoning(fresh.reasoning_effort)
+        set_gen_seed("" if fresh.seed is None else str(fresh.seed))
+        set_gen_json_mode(fresh.json_mode)
+        set_tell_time(fresh.tell_model_time)
+        set_router_help(fresh.router_help)
+
     ft.use_effect(
-        lambda: set_settings(AppSettings.load()),
+        _reload_settings,
         [state.settings_version],
     )
     page = getattr(ft.context, "page", None)
@@ -451,6 +484,7 @@ def SettingsScreen():
     gen_tool_rounds, set_gen_tool_rounds = ft.use_state(str(settings.tool_max_rounds))
     gen_tool_retries, set_gen_tool_retries = ft.use_state(str(settings.tool_retry_attempts))
     gen_reasoning, set_gen_reasoning = ft.use_state(settings.reasoning_effort)
+    gen_seed, set_gen_seed = ft.use_state("" if settings.seed is None else str(settings.seed))
     gen_json_mode, set_gen_json_mode = ft.use_state(settings.json_mode)
     tell_time, set_tell_time = ft.use_state(settings.tell_model_time)
     router_help, set_router_help = ft.use_state(settings.router_help)
@@ -587,6 +621,13 @@ def SettingsScreen():
             context = max(1024, int(_num(gen_context, "Context window")))
             rounds = int(_bound(_num(gen_tool_rounds, "Tool rounds"), 1, 10))
             retries = int(_bound(_num(gen_tool_retries, "Tool retries"), 0, 5))
+            seed: int | None = None
+            if gen_seed.strip():
+                try:
+                    seed = int(gen_seed.strip())
+                except ValueError:
+                    show_snack(page, "Seed must be a whole number.")
+                    return
         except ValueError as exc:
             show_snack(page, str(exc))
             return
@@ -601,6 +642,7 @@ def SettingsScreen():
                 "tool_max_rounds": rounds,
                 "tool_retry_attempts": retries,
                 "reasoning_effort": gen_reasoning,
+                "seed": seed,
                 "json_mode": gen_json_mode,
             },
         )
@@ -614,6 +656,7 @@ def SettingsScreen():
         set_gen_context(str(context))
         set_gen_tool_rounds(str(rounds))
         set_gen_tool_retries(str(retries))
+        set_gen_seed("" if seed is None else str(seed))
         show_snack(page, "Generation settings saved.")
         set_gen_open(False)
 
@@ -743,7 +786,14 @@ def SettingsScreen():
             state.mcp_test_results = results
             state.mcp_testing = state.mcp_testing - {server_id}
 
-        methods.test_mcp_server(server_id, done)
+        try:
+            methods.test_mcp_server(server_id, done)
+        except Exception:
+            # A synchronous raise (bad id, dead controller) used to leave the
+            # id in mcp_testing forever — a permanent spinner. Clear it and
+            # let the error surface through the controller's own notice.
+            state.mcp_testing = state.mcp_testing - {server_id}
+            raise
 
     appearance = _section(
         "Appearance",
@@ -979,16 +1029,34 @@ def SettingsScreen():
                             ],
                             on_select=lambda e: set_gen_reasoning(str(e.control.value or "auto")),
                         ),
-                        ft.Switch(
-                            # ~15 tokens/turn. Stops the model guessing at "today".
-                            value=tell_time,
-                            active_color=ft.Colors.PRIMARY,
-                            on_change=lambda e: _set_tell_time(bool(e.control.value)),
+                        ft.Row(
+                            spacing=tokens.SPACE_XXS,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            controls=[
+                                ft.Switch(
+                                    # ~15 tokens/turn. Stops the model guessing at "today".
+                                    value=tell_time,
+                                    active_color=ft.Colors.PRIMARY,
+                                    tooltip="Tell time",
+                                    on_change=lambda e: _set_tell_time(bool(e.control.value)),
+                                ),
+                                ft.Text("Tell time", size=tokens.FONT_SM),
+                            ],
                         ),
-                        ft.Switch(
-                            value=gen_json_mode,
-                            active_color=ft.Colors.PRIMARY,
-                            on_change=lambda e: set_gen_json_mode(bool(e.control.value)),
+                        ft.Row(
+                            spacing=tokens.SPACE_XXS,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            controls=[
+                                # Deferred like every other knob on this card:
+                                # persisted by Save below, not on toggle.
+                                ft.Switch(
+                                    value=gen_json_mode,
+                                    active_color=ft.Colors.PRIMARY,
+                                    tooltip="JSON mode",
+                                    on_change=lambda e: set_gen_json_mode(bool(e.control.value)),
+                                ),
+                                ft.Text("JSON mode", size=tokens.FONT_SM),
+                            ],
                         ),
                     ],
                 ),
@@ -1056,6 +1124,13 @@ def SettingsScreen():
                             controls=[
                                 _num_field("Tool rounds", gen_tool_rounds, set_gen_tool_rounds),
                                 _num_field("Tool retries", gen_tool_retries, set_gen_tool_retries),
+                                # Optional seed: blank means unset (None).
+                                _num_field(
+                                    "Seed (optional)",
+                                    gen_seed,
+                                    set_gen_seed,
+                                    width=170,
+                                ),
                             ],
                         ),
                     ),
@@ -1683,11 +1758,11 @@ def SettingsScreen():
             subtitle=constants.CONTACT_EMAIL,
             stacked=narrow,
             on_click=lambda _: methods.open_url(f"mailto:{constants.CONTACT_EMAIL}"),
-            trailing=ft.IconButton(
+            # No trailing on_click: the row already handles the tap, and a
+            # second handler on the icon double-fires open_url.
+            trailing=ft.Icon(
                 ft.Icons.OPEN_IN_NEW,
-                icon_size=tokens.ICON_XS,
-                tooltip="Email",
-                on_click=lambda _: methods.open_url(f"mailto:{constants.CONTACT_EMAIL}"),
+                size=tokens.ICON_XS,
             ),
         ),
         setting_row(
@@ -1698,13 +1773,9 @@ def SettingsScreen():
             on_click=lambda _: methods.open_url(
                 constants.PLAYSTORE_URL if is_mobile else constants.GITHUB_REPO_URL
             ),
-            trailing=ft.IconButton(
+            trailing=ft.Icon(
                 ft.Icons.OPEN_IN_NEW,
-                icon_size=tokens.ICON_XS,
-                tooltip="Open",
-                on_click=lambda _: methods.open_url(
-                    constants.PLAYSTORE_URL if is_mobile else constants.GITHUB_REPO_URL
-                ),
+                size=tokens.ICON_XS,
             ),
         ),
         setting_row(
@@ -1721,6 +1792,13 @@ def SettingsScreen():
             "Usage agreement & legal",
             icon=ft.Icons.GAVEL_ROUNDED,
             on_click=lambda _: _open_legal_dialog(page, methods),
+        ),
+        setting_row(
+            icon=ft.Icons.PRIVACY_TIP_OUTLINED,
+            title="Ad privacy options",
+            subtitle="Consent choices for personalized ads",
+            stacked=narrow,
+            on_click=lambda _: methods.open_ad_privacy_options(),
         ),
     ]
     if page is not None:

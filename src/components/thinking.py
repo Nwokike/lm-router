@@ -160,7 +160,9 @@ def ToolCallBlock(
     if open_:
         body.append(
             ft.Container(
-                padding=ft.Margin.only(top=tokens.SPACE_XS),
+                # Padding (not Margin): the old ft.Margin here was the wrong
+                # value type and every expanded tool call hit it.
+                padding=ft.Padding.only(top=tokens.SPACE_XS),
                 content=theme.markdown(content or "_No output._", is_dark=is_dark),
             ),
         )

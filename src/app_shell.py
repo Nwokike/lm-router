@@ -1,4 +1,9 @@
-"""App shell: onboarding gate, offline banner, AppHeader + four tabs."""
+"""App shell: onboarding gate, offline banner, AppHeader + bottom navigation.
+
+History is a sub-view, not a fourth tab: the NavigationBar carries three
+destinations (Chat/Server/Settings) and opening History keeps the bar's
+highlight on the tab the user came from instead of lying about location.
+"""
 
 import contextlib
 
@@ -37,7 +42,11 @@ def _sync_navigation_bar(page, state, methods) -> None:
         return
     index = state.selected_tab if 0 <= state.selected_tab < 4 else 0
     view.navigation_bar = ft.NavigationBar(
-        selected_index=index if index < 3 else 0,
+        # History (3) is a sub-view: keep the highlight on the last real tab
+        # so the bar never claims the user is on Chat while reading History.
+        selected_index=state.last_nav_tab
+        if 0 <= state.last_nav_tab < 3
+        else (index if index < 3 else 0),
         on_change=lambda e: methods.set_tab(int(e.control.selected_index)),
         destinations=[
             ft.NavigationBarDestination(
@@ -99,33 +108,78 @@ def AppShell():
             content=OnboardingScreen(key=ft.ValueKey("view-onboarding")),
         )
 
+    # Solid error background + on-error foreground: the old tinted wash with
+    # ERROR-on-tint text was low-contrast in dark mode. Omitted entirely when
+    # online (no dead layout node).
     offline_banner = (
         ft.Container(
             padding=ft.Padding(tokens.SPACE_LG, tokens.SPACE_SM, tokens.SPACE_LG, tokens.SPACE_SM),
-            bgcolor=ft.Colors.with_opacity(tokens.OPACITY_STRONG, ft.Colors.ERROR),
+            bgcolor=ft.Colors.ERROR,
             content=ft.Row(
                 spacing=tokens.SPACE_SM,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 controls=[
                     ft.Icon(
                         ft.Icons.WIFI_OFF_ROUNDED,
-                        size=tokens.ICON_XS,
-                        color=ft.Colors.ERROR,
+                        size=tokens.ICON_SM,
+                        color=ft.Colors.ON_ERROR,
                     ),
                     ft.Text(
                         "You're offline. Gateway and search may be unavailable.",
-                        size=tokens.FONT_SM,
-                        color=ft.Colors.ERROR,
+                        size=tokens.FONT_MD,
+                        weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.ON_ERROR,
                     ),
                 ],
             ),
         )
         if state.offline
-        else ft.Container(height=0)
+        else None
     )
 
-    views = [
-        ft.Column(
+    def _build_view(index: int):
+        # Lazy: only the visible screen pays construction cost each render.
+        # The old 4-element list rebuilt Chat+Server+Settings+History (catalog
+        # closures, tier lookups, pill builders) on every log flush at ~2Hz.
+        if index == 1:
+            return ft.Column(
+                expand=True,
+                spacing=0,
+                controls=[
+                    AppHeader(
+                        title="Server",
+                        show_quit=True,
+                        extra_actions=[
+                            ft.IconButton(
+                                ft.Icons.TERMINAL_ROUNDED,
+                                icon_size=tokens.ICON_MD,
+                                tooltip="Activity log",
+                                on_click=lambda _: methods.open_log_terminal(),
+                            ),
+                        ],
+                    ),
+                    ServerScreen(key=ft.ValueKey("view-server")),
+                ],
+            )
+        if index == 2:
+            return ft.Column(
+                expand=True,
+                spacing=0,
+                controls=[
+                    AppHeader(title="Settings", show_quit=True),
+                    SettingsScreen(key=ft.ValueKey("view-settings")),
+                ],
+            )
+        if index == 3:
+            return ft.Column(
+                expand=True,
+                spacing=0,
+                controls=[
+                    AppHeader(title="History", show_quit=True),
+                    HistoryScreen(key=ft.ValueKey("view-history")),
+                ],
+            )
+        return ft.Column(
             expand=True,
             spacing=0,
             controls=[
@@ -142,56 +196,22 @@ def AppShell():
                 ),
                 ChatScreen(key=ft.ValueKey("view-chat")),
             ],
-        ),
-        ft.Column(
-            expand=True,
-            spacing=0,
-            controls=[
-                AppHeader(
-                    title="Server",
-                    show_quit=True,
-                    extra_actions=[
-                        ft.IconButton(
-                            ft.Icons.TERMINAL_ROUNDED,
-                            icon_size=tokens.ICON_MD,
-                            tooltip="Activity log",
-                            on_click=lambda _: methods.open_log_terminal(),
-                        ),
-                    ],
-                ),
-                ServerScreen(key=ft.ValueKey("view-server")),
-            ],
-        ),
-        ft.Column(
-            expand=True,
-            spacing=0,
-            controls=[
-                AppHeader(title="Settings", show_quit=True),
-                SettingsScreen(key=ft.ValueKey("view-settings")),
-            ],
-        ),
-        ft.Column(
-            expand=True,
-            spacing=0,
-            controls=[
-                AppHeader(title="History", show_quit=True),
-                HistoryScreen(key=ft.ValueKey("view-history")),
-            ],
-        ),
-    ]
-    index = state.selected_tab if 0 <= state.selected_tab < len(views) else 0
+        )
+
+    index = state.selected_tab if 0 <= state.selected_tab < 4 else 0
 
     # SafeArea keeps the header clear of the Android status bar and the
     # content clear of the gesture bar; the nav itself is View chrome and
     # handles its own inset (see _sync_navigation_bar).
+    controls: list = []
+    if offline_banner is not None:
+        controls.append(offline_banner)
+    controls.append(ft.Container(expand=True, content=_build_view(index)))
     return ft.SafeArea(
         expand=True,
         content=ft.Column(
             expand=True,
             spacing=0,
-            controls=[
-                offline_banner,
-                ft.Container(expand=True, content=views[index]),
-            ],
+            controls=controls,
         ),
     )

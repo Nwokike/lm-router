@@ -397,17 +397,21 @@ def ChatScreen():
                     controls=[
                         ft.Row(
                             spacing=tokens.SPACE_SM,
+                            vertical_alignment=ft.CrossAxisAlignment.START,
                             controls=[
                                 ft.Icon(
                                     ft.Icons.ERROR,
                                     size=tokens.ICON_SM,
                                     color=ft.Colors.ERROR,
                                 ),
+                                # expand: long error strings wrap instead of
+                                # overflowing/clipping off the row's edge.
                                 ft.Text(
                                     content,
                                     size=tokens.FONT_MD,
                                     color=ft.Colors.ERROR,
                                     selectable=True,
+                                    expand=True,
                                 ),
                             ],
                         ),

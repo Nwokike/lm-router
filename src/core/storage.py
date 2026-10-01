@@ -20,6 +20,7 @@ cannot fail across volumes; user exports write straight to the chosen
 destination because that path is the final home, not scratch.
 """
 
+import contextlib
 import json
 import os
 import tempfile
@@ -114,8 +115,19 @@ def engine_cache_path() -> Path:
 
 
 def atomic_write_json(path: Path, data: object) -> None:
-    """Write JSON via temp file + os.replace so a crash never truncates state."""
+    """Write JSON via temp file + os.replace so a crash never truncates state.
+
+    Files land 0600 (owner-only): settings carry provider API keys and the
+    share key, and the inherited umask left them world-readable on default
+    POSIX setups. No-ops on Windows (chmod is a no-op there anyway).
+    """
+    import stat
+
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    with contextlib.suppress(OSError):
+        os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)
     os.replace(tmp, path)
+    with contextlib.suppress(OSError):
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)

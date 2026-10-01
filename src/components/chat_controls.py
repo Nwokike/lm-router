@@ -152,7 +152,10 @@ def ModelPicker(
                             expand=True,
                             controls=[
                                 ft.Text(
-                                    label if is_auto(model) else model_id,
+                                    # This ROW's label, not the outer selected
+                                    # label: the auto row used to show the
+                                    # current model's name when it differed.
+                                    model_label(model) if is_auto(model) else model_id,
                                     size=tokens.FONT_BODY_SM,
                                     weight=ft.FontWeight.W_600 if selected else ft.FontWeight.W_400,
                                     color=theme.text_color(is_dark),
@@ -252,6 +255,7 @@ def SessionBar(
     model_pill = ModelPicker(state=state, methods=methods, is_dark=is_dark)
 
     search_pill = ft.Container(
+        ink=True,
         padding=ft.Padding.symmetric(horizontal=tokens.SPACE_SNUG, vertical=tokens.SPACE_TIGHT),
         border_radius=tokens.RADIUS_PILL,
         bgcolor=ft.Colors.with_opacity(
@@ -283,6 +287,7 @@ def SessionBar(
 
     mcp_count = len(state.mcp_tools)
     mcp_pill = ft.Container(
+        ink=True,
         padding=ft.Padding.symmetric(horizontal=tokens.SPACE_SNUG, vertical=tokens.SPACE_TIGHT),
         border_radius=tokens.RADIUS_PILL,
         bgcolor=ft.Colors.with_opacity(

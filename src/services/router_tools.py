@@ -60,7 +60,7 @@ async def gateway_status(http: HttpService) -> str:
                 "models: "
                 f"{models.get('total', 0)} total, "
                 f"{models.get('active', 0)} active, "
-                f"{models.get('degraded', 0)} capped or slow, "
+                f"{models.get('degraded', 0)} rate limited, "
                 f"{models.get('failed', 0)} failed"
             )
         if sources:

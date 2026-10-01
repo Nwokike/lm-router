@@ -65,6 +65,7 @@ class ControllerMethods:
     check_update: Callable[[], None] = _noop
     open_update_dialog: Callable[[], None] = _noop
     open_about: Callable[[], None] = _noop
+    open_ad_privacy_options: Callable[[], None] = _noop
     quit_app: Callable[[], None] = _noop
     finish_onboarding: Callable[[], None] = _noop
     open_url: Callable[[str], None] = _noop

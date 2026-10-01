@@ -662,17 +662,30 @@ def test_mcp_owner_ui_loop_spawn_receives_a_coroutine(boot_page) -> None:
         def is_closed(self) -> bool:
             return False
 
-        def create_task(self, coro):
-            assert aio.iscoroutine(coro), f"create_task got {type(coro)!r}, want a coroutine"
-            created.append(coro)
+        def call_soon_threadsafe(self, callback, *args):
+            # run_coroutine_threadsafe schedules the coroutine's __step via
+            # this hook: invoking the callback runs one event-loop tick.
+            created.append((callback, args))
+            callback(*args)
             return _FakeTask()
+
+    real_run = aio.run_coroutine_threadsafe
+
+    def _spy_run(coro, loop, *args, **kwargs):
+        assert aio.iscoroutine(coro), f"owner got {type(coro)!r}, want a coroutine"
+        created.append(coro)
+        return real_run(coro, aio.new_event_loop(), *args, **kwargs)
 
     controller._ui_loop = _FakeLoop()
     controller._mcp_future = None
-    controller._ensure_mcp_owner()
-    assert created, "loop.create_task never called"
-    assert aio.iscoroutine(created[0])
-    created[0].close()  # never awaited; close to avoid a pending-coroutine warning
+    import unittest.mock as mock
+
+    with mock.patch.object(aio, "run_coroutine_threadsafe", _spy_run):
+        controller._ensure_mcp_owner()
+    coros = [c for c in created if aio.iscoroutine(c)]
+    assert coros, "owner coroutine never scheduled"
+    for c in coros:
+        c.close()  # never awaited; close to avoid a pending-coroutine warning
     assert controller._mcp_future is not None
 
 

@@ -51,9 +51,18 @@ class _TrackedClient:
         self._acm = acm
 
     async def __aenter__(self):
-        value = await self._acm.__aenter__()
+        # Track BEFORE entering: a cancel landing during transport enter
+        # leaves a suspended generator no drain could otherwise find.
+        # Removal is idempotent, so double-listing is harmless.
         _PENDING_CLIENTS.append(self)
-        return value
+        try:
+            return await self._acm.__aenter__()
+        except BaseException:
+            # Enter failed: drop the listing (the generator may still need a
+            # drain — the caller's timeout path handles that).
+            with contextlib.suppress(ValueError):
+                _PENDING_CLIENTS.remove(self)
+            raise
 
     async def __aexit__(self, *exc_info):
         try:
@@ -295,6 +304,12 @@ async def _stdio_diagnose(server: MCPServerConfig, error: MCPError) -> str:
     command = str(server.command or "")
     cmd = shutil.which(command) or command
     try:
+        # Pass through the server's env/cwd: without them a server that fails
+        # for env/cwd reasons reports a misleading stderr tail.
+        import os as _os
+
+        env = dict(_os.environ)
+        env.update(server.env or {})
         proc = await asyncio.to_thread(
             subprocess.run,
             [cmd, *server.args],
@@ -302,6 +317,8 @@ async def _stdio_diagnose(server: MCPServerConfig, error: MCPError) -> str:
             capture_output=True,
             text=True,
             timeout=DIAGNOSE_TIMEOUT,
+            env=env,
+            cwd=server.cwd or None,
         )
         tail = _stderr_tail(proc.stderr) or _stderr_tail(proc.stdout)
     except subprocess.TimeoutExpired as exc:
@@ -568,8 +585,22 @@ class MCPHub:
             params = build_server_params(server, is_mobile=self.is_mobile)
         except MCPError as exc:
             raise exc
+        # Bound like _connect: an unresponsive server used to wedge the
+        # Settings Test button for up to the SDK's 300s SSE default.
         try:
-            context = tools_from_mcp_servers([params])
+            async with asyncio.timeout(CONNECT_TIMEOUT):
+                return await self._test_inner(server, params)
+        except TimeoutError as exc:
+            # Drain the half-entered SDK stack in THIS task before anything
+            # else: without it the abandoned transport generator is finalized
+            # by arbitrary-task GC and bricks foreign cancel scopes.
+            await _drain_pending_clients()
+            error = MCPError("unreachable", f"No response within {CONNECT_TIMEOUT:.0f}s.")
+            raise MCPError(error.kind, await _stdio_diagnose(server, error)) from exc
+
+    async def _test_inner(self, server: MCPServerConfig, params: object) -> list[dict]:
+        try:
+            context = tools_from_mcp_servers([params])  # type: ignore[list-item]
             tools = await context.__aenter__()
             results: list[dict] = []
             try:

@@ -16,7 +16,9 @@ import httpx
 from core import constants
 from core.logging import LOG
 
-RETRY_STATUSES = (502, 503, 504)
+# 408/429 ride along for idempotent methods only: POST is never replayed,
+# so a 429 on a probe stays the bench/search layer's own retry decision.
+RETRY_STATUSES = (408, 429, 502, 503, 504)
 BACKOFF = (0.2, 0.5, 1.0)
 RETRY_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
 

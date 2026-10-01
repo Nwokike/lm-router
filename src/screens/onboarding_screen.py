@@ -3,7 +3,6 @@ terms gate on the last slide. Structure follows Sherlock's gesture pager;
 slide one uses the use_app_icon tint rule Sherlock uses for dark mode.
 """
 
-import asyncio
 import contextlib
 
 import flet as ft
@@ -28,10 +27,6 @@ _DOT_RADIUS = 4
 
 # Swipe velocity (logical px/s) that counts as a deliberate flick.
 _SWIPE_VELOCITY = 200
-
-# Strong references so haptic asyncio tasks are never garbage-collected
-# mid-flight (RUF006): fire-and-forget tasks must outlive their frame.
-_background_tasks: set[asyncio.Task] = set()
 
 _SLIDES = [
     {
@@ -133,10 +128,20 @@ def OnboardingScreen() -> Control:
     is_last = page_idx == len(_SLIDES) - 1
 
     def _haptic() -> None:
+        # Reuse the HapticFeedback registered in page.services at boot: a
+        # detached ft.HapticFeedback() has no page channel, so light_impact
+        # is a silent no-op and every onboarding tap was mute.
         with contextlib.suppress(Exception):
-            task = asyncio.create_task(ft.HapticFeedback().light_impact())
-            _background_tasks.add(task)
-            task.add_done_callback(_background_tasks.discard)
+            page = getattr(ft.context, "page", None)
+            svc = None
+            if page is not None:
+                svc = next(
+                    (s for s in getattr(page, "services", []) if isinstance(s, ft.HapticFeedback)),
+                    None,
+                )
+            if svc is None:
+                return
+            page.run_task(svc.light_impact)
 
     def _finish() -> None:
         # Flip the observable HERE (in the tap) so this screen's context
@@ -158,7 +163,8 @@ def OnboardingScreen() -> Control:
 
     def _on_skip(e: object) -> None:
         _haptic()
-        set_show_hint(True)  # skipping still requires agreeing on last slide
+        # Do NOT set the hint here: jumping to the last slide is not a failed
+        # finish attempt, and the red error would already show on arrival.
         if agreed:
             _finish()
         else:
@@ -198,15 +204,18 @@ def OnboardingScreen() -> Control:
             ),
         )
 
+    # Expandable label (not fixed Row): at 320-360dp the checkbox + long
+    # label clipped. The Text takes leftover width and wraps instead.
     terms_row = ft.Row(
         spacing=tokens.SPACE_XS,
         alignment=ft.MainAxisAlignment.CENTER,
-        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        vertical_alignment=ft.CrossAxisAlignment.START,
         controls=[
             ft.Checkbox(value=agreed, on_change=lambda e: set_agreed(bool(e.control.value))),
             ft.Text(
                 "I agree to the ",
                 size=tokens.FONT_BODY_SM,
+                expand=True,
                 spans=[
                     ft.TextSpan(
                         "Privacy Policy",

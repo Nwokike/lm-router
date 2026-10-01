@@ -16,8 +16,10 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    HttpUrl,
     SecretStr,
     ValidationError,
+    field_validator,
     model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -46,10 +48,17 @@ class ProviderConfig(BaseModel):
 
     id: str = Field(default_factory=_new_id)
     name: str = Field(min_length=1, max_length=64)
-    base_url: AnyUrl
+    # HttpUrl (not AnyUrl): gateway/provider URLs are http(s) only — an
+    # ftp:// typo used to validate and then fail on first turn.
+    base_url: HttpUrl
     api_key: SecretStr | None = None
     models: list[str] = []
     enabled: bool = True
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_name(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
 
 class MCPServerConfig(BaseModel):
@@ -68,10 +77,40 @@ class MCPServerConfig(BaseModel):
     # which of these a payload carries per transport.
     env: dict[str, str] = {}
     cwd: str | None = None
-    timeout: float | None = None
-    sse_read_timeout: float | None = None
+    # Field-level gt=0 (not just the after-validator): the error loc points
+    # at the field itself, so the form can highlight the right input.
+    timeout: float | None = Field(default=None, gt=0)
+    sse_read_timeout: float | None = Field(default=None, gt=0)
     disabled_tools: list[str] = Field(default_factory=list)
     enabled: bool = True
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_name(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("timeout", "sse_read_timeout", mode="before")
+    @classmethod
+    def _coerce_timeout(cls, value: object) -> object:
+        # The form posts strings; direct dict callers may too. "" means
+        # unset, numeric strings coerce — the model owns this, not the UI.
+        if value is None:
+            return None
+        if isinstance(value, str):
+            if not value.strip():
+                return None
+            try:
+                return float(value.strip())
+            except ValueError:
+                return value
+        return value
+
+    @field_validator("cwd", mode="before")
+    @classmethod
+    def _empty_cwd_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @model_validator(mode="after")
     def _check_transport(self) -> MCPServerConfig:
@@ -83,10 +122,6 @@ class MCPServerConfig(BaseModel):
             ("http://", "https://")
         ):
             raise ValueError("remote urls must start with http:// or https://")
-        if self.timeout is not None and self.timeout <= 0:
-            raise ValueError("timeout must be a positive number of seconds")
-        if self.sse_read_timeout is not None and self.sse_read_timeout <= 0:
-            raise ValueError("sse read timeout must be a positive number of seconds")
         return self
 
 

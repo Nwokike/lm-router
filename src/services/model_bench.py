@@ -19,7 +19,10 @@ import httpx
 from core.logging import LOG
 from services.http import HttpService
 
-TEST_TIMEOUT = 120.0  # reference tool: 120s per attempt
+# 120s total per attempt, but connect stays at 5s: a black-holed endpoint
+# used to stall one serial probe (and the whole sweep position) for the full
+# 2 minutes on connect alone.
+TEST_TIMEOUT = httpx.Timeout(120.0, connect=5.0)
 RATE_RETRY_DELAY = 4.0  # reference: one retry, 4s later
 PROMPT = "Reply with exactly: OK"
 MAX_TOKENS = 16
@@ -159,7 +162,9 @@ async def test_model(
         break
     ms = int((time.monotonic() - started) * 1000)
     text = text_of(payload)
-    verdict = classify(status, text, transport_error=bool(failure) and status is None)
+    # A transport error on the retry must not inherit a stale 429 status from
+    # attempt 0 (would misclassify as RATE instead of FAIL).
+    verdict = classify(status, text, transport_error=bool(failure))
     # A 200 carrying an error body is not a successful reply (better than
     # the reference, which would stringify it into an OK).
     error_message = ""

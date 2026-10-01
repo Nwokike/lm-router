@@ -410,8 +410,10 @@ def test_server_screen_status_words_are_honest(_renderer_page) -> None:
                 if isinstance(value, str):
                     texts.append(value)
         blob = " ".join(texts)
-        assert "2 capped or slow" in blob, blob[:500]
-        assert "2 rate limited" not in blob, "the mixed bucket must not claim rate limiting"
+        # Owner wording (M3): the summary bucket reads "rate limited", never
+        # the old "capped or slow" euphemism.
+        assert "2 rate limited" in blob, blob[:500]
+        assert "2 capped or slow" not in blob, "summary must say rate limited"
         assert "rate limited" in blob, "the untested row must read 'rate limited'"
         assert "untested" not in blob, "the raw wire word must never reach the user"
     finally:

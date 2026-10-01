@@ -76,10 +76,15 @@ class RedactFileHandler(logging.handlers.RotatingFileHandler):
     """Always-on rotating file log — GUI users may never see the terminal."""
 
     def emit(self, record: logging.LogRecord) -> None:
+        # Redact-then-delegate: the old direct stream.write bypassed
+        # RotatingFileHandler's lock + shouldRollover, so maxBytes never
+        # triggered and the log grew unbounded. Swap the formatted message
+        # for its redacted form, then let super().emit() own rotation.
         try:
-            # Format FIRST (Formatter needs a LogRecord), redact the text after.
-            self.stream.write(redact(self.format(record)) + self.terminator)
-            self.flush()
+            record = logging.makeLogRecord(record.__dict__)
+            record.msg = redact(self.format(record))
+            record.args = None
+            super().emit(record)
         except Exception:
             self.handleError(record)
 

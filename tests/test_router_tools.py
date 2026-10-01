@@ -36,7 +36,7 @@ async def test_gateway_status_reports_live_counts() -> None:
     out = await router_tools.gateway_status(_http(handler))
     assert "running" in out and "uptime" in out and "1h 30m" in out, out
     assert "38 total" in out and "26 active" in out, out
-    assert "capped or slow" in out and "5 failed" in out, out
+    assert "rate limited" in out and "5 failed" in out, out
     assert "4/4 responsive" in out and "42s ago" in out, out
     # Only counts: never a model id or source name (invariant 13).
     assert "auto" not in out

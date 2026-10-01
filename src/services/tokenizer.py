@@ -27,7 +27,11 @@ from core.logging import LOG
 
 DEFAULT_FALLBACK_ENCODING = "o200k_base"
 _LOAD_TIMEOUT = 1.5
-_attempted: set[str] = set()
+# Negative cache with TTL: a transient failure (offline at boot, then online)
+# used to disable real tokenization for the PROCESS lifetime. Entries older
+# than this are retried.
+_ATTEMPT_TTL = 300.0
+_attempted: dict[str, float] = {}
 _attempt_lock = threading.Lock()
 _loaded: dict[str, tiktoken.Encoding] = {}
 
@@ -44,20 +48,31 @@ def _encoding_name(model_id: str) -> tuple[str, bool]:
 
 def _load_encoding(name: str) -> tiktoken.Encoding | None:
     """Resolve an encoding with a hard time budget; None when unavailable."""
+    import time as _time
+
     enc = _tk_registry.ENCODINGS.get(name)
     if enc is not None:
         return enc
     with _attempt_lock:
-        if name in _attempted:
+        attempted_at = _attempted.get(name)
+        if attempted_at is not None and _time.monotonic() - attempted_at < _ATTEMPT_TTL:
             return _tk_registry.ENCODINGS.get(name)
-        _attempted.add(name)
+        _attempted[name] = _time.monotonic()
     result: list[tiktoken.Encoding | None] = [None]
 
     def _worker() -> None:
         try:
-            result[0] = tiktoken.get_encoding(name)
+            got = tiktoken.get_encoding(name)
         except Exception as exc:
             LOG.debug("tiktoken load failed for %s: %s", name, exc)
+            return
+        result[0] = got
+        # Write-through: a download finishing just after the join used to
+        # evaporate (only the local `result` saw it) while the negative
+        # cache blocked every retry. Publish late arrivals so the next
+        # call picks them up.
+        with _attempt_lock:
+            _loaded[name] = got
 
     thread = threading.Thread(target=_worker, name=f"tiktoken-{name}", daemon=True)
     thread.start()
@@ -115,16 +130,43 @@ def count_tokens(text: str, encoding: tiktoken.Encoding | None = None) -> int:
     return len(encoding.encode_ordinary(text))
 
 
+# Rough per-image cost when a vision block carries no better signal. Real
+# pricing is 85-1700 tokens/image by size/detail; this keeps one image from
+# either vanishing (0) or exploding (base64 repr stringified = tens of
+# thousands of phantom tokens).
+IMAGE_TOKEN_ALLOWANCE = 1000
+
+
 def _extract_text(message: Any) -> str:
     """Extract plain text from a ChatMessage, dict, or string."""
     if isinstance(message, str):
         return message
     if isinstance(message, dict):
+        content = message.get("content")
+    else:
+        content = getattr(message, "content", None)
+    if isinstance(content, list):
+        # Vision-shaped content blocks: join text parts, allow a flat cost
+        # per image part, never str() the block list (keys + base64 repr
+        # would explode the count by tens of thousands of phantom tokens).
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if str(block.get("type") or "") == "text":
+                text = block.get("text")
+                if isinstance(text, str) and text:
+                    parts.append(text)
+            elif "image" in str(block.get("type") or ""):
+                parts.append(f"[image ~{IMAGE_TOKEN_ALLOWANCE} tokens]")
+        if parts:
+            return "\n".join(parts)
+        return ""
+    if isinstance(message, dict):
         return str(message.get("content") or "")
     text = getattr(message, "text", None)
     if text is not None:
         return str(text)
-    content = getattr(message, "content", None)
     if isinstance(content, str):
         return content
     return str(content or "")
@@ -179,7 +221,20 @@ def estimate_turn_tokens(
                 name = getattr(tool, "name", "") or ""
                 total += count_tokens(f"{name}: {desc}", encoding) + 6
 
+    if encoding is None:
+        # Heuristic counts undercount CJK/code (1-2 chars/token vs the ~4
+        # assumed): add 20% headroom so heuristic budgets never promise more
+        # context than the model actually has. Triggered on encoding-is-None
+        # (heuristic actually used), NOT on is_approx (mapping unknown): a
+        # cold known-model box counts heuristically with zero headroom
+        # otherwise — exactly the case this protects.
+        total = int(total * 1.2) + 1
     return total, is_approx
+
+
+def history_tail(chat_history: list[Any], n: int) -> list[Any]:
+    """Last n messages, preserving order (budget-overflow fallback)."""
+    return list(chat_history[-n:]) if n > 0 else []
 
 
 def truncate_history_to_budget(
@@ -192,30 +247,42 @@ def truncate_history_to_budget(
     Prioritizes dropping oldest tool results and assistant turns first.
     Returns (kept_history, dropped_count).
     """
-    if not chat_history or budget_tokens <= 0:
-        return list(chat_history), 0
+    if not chat_history:
+        return [], 0
+    if budget_tokens <= 0:
+        # The prompt alone exceeds the budget: returning the FULL history is
+        # precisely inverted (maximum over-budget input gets zero trimming).
+        # Keep only the latest turn so the request has a chance.
+        return history_tail(chat_history, 1), len(chat_history) - 1
 
     encoding, _ = get_encoding_for_model(model)
     history = list(chat_history)
     dropped = 0
 
-    def current_tokens() -> int:
-        return sum(count_tokens(_extract_text(m), encoding) + 4 for m in history)
+    # Per-message count cache: the old current_tokens() re-encoded the whole
+    # history per eviction (O(n^2) on long sessions, synchronously in
+    # preflight). Counts are stable — text doesn't change while trimming.
+    counts = [count_tokens(_extract_text(m), encoding) + 4 for m in history]
+    total = sum(counts)
+
+    def _drop_at(idx: int) -> None:
+        nonlocal total, dropped
+        total -= counts.pop(idx)
+        history.pop(idx)
+        dropped += 1
 
     # First pass: drop oldest function/tool messages
     idx = 0
-    while current_tokens() > budget_tokens and idx < len(history) - 1:
+    while total > budget_tokens and idx < len(history) - 1:
         role = _extract_role(history[idx])
         if "function" in role or "tool" in role:
-            history.pop(idx)
-            dropped += 1
+            _drop_at(idx)
         else:
             idx += 1
 
     # Second pass: drop oldest turns from the beginning
-    while current_tokens() > budget_tokens and len(history) > 1:
-        history.pop(0)
-        dropped += 1
+    while total > budget_tokens and len(history) > 1:
+        _drop_at(0)
 
     return history, dropped
 
@@ -226,7 +293,9 @@ def prewarm_tokenizers() -> None:
     Each encoding gets at most _LOAD_TIMEOUT; failures fall back to the
     heuristic and are retried lazily on later turns.
     """
-    for name in (DEFAULT_FALLBACK_ENCODING, "cl100k_base"):
+    # o200k_harmony covers gpt-oss-* models (control tokens like
+    # <|channel|> miscount as plain text under o200k_base otherwise).
+    for name in (DEFAULT_FALLBACK_ENCODING, "cl100k_base", "o200k_harmony"):
         _load_encoding(name)
     LOG.info(
         "tokenizers pre-warmed (registry=%s)",

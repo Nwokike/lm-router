@@ -716,9 +716,10 @@ def test_build_passes_the_full_sdk_surface() -> None:
 def test_timeouts_must_be_positive() -> None:
     from pydantic import ValidationError
 
-    with pytest.raises(ValidationError, match="positive"):
+    # Field(gt=0): non-positive timeouts are rejected at the field itself.
+    with pytest.raises(ValidationError, match="greater than 0"):
         MCPServerConfig(name="x", transport="sse", url="https://x.test/sse", timeout=0)
-    with pytest.raises(ValidationError, match="positive"):
+    with pytest.raises(ValidationError, match="greater than 0"):
         MCPServerConfig(
             name="y",
             transport="streamable_http",

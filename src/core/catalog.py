@@ -206,7 +206,8 @@ def _rank_alternatives(model_id: str, catalog: list[dict[str, Any]]) -> list[dic
     # Prefer an alternative whose own hint is not a low cap, so the suggestion
     # is likely to work right now.
     def _cap(m: dict) -> tuple[int, float, str]:
-        per_hour = (m.get("rate_hint") or {}).get("approx_per_hour")
+        hint = m.get("rate_hint")
+        per_hour = hint.get("approx_per_hour") if isinstance(hint, dict) else None
         try:
             cap = int(per_hour) if per_hour is not None else 10**9
         except TypeError, ValueError:
@@ -254,7 +255,13 @@ def rate_limit_advice(model_id: str, catalog: list[dict[str, Any]]) -> str:
         suggestion = f" Try {names} instead."
 
     if hint:
-        return f"Rate limited. {hint}.{suggestion}" if suggestion else f"Rate limited. {hint}."
+        # Gateway labels are verbatim (never edited), but they may already
+        # end in "." — avoid the ".." join.
+        clean = hint.rstrip()
+        sentence = clean if clean.endswith((".", "!", "?")) else f"{clean}."
+        if suggestion:
+            return f"Rate limited. {sentence}{suggestion}"
+        return f"Rate limited. {sentence}"
     return (
         f"Rate limited by this model.{suggestion}"
         if suggestion

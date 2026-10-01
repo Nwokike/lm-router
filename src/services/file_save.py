@@ -75,26 +75,36 @@ async def save_text_file(
             LOG.warning("file picker registration update failed: %s", exc)
 
     destination: str | None = None
+    dialog_failed = False
     try:
         destination = await picker.save_file(
             dialog_title=dialog_title or f"Save {filename}",
             file_name=filename,
         )
     except Exception as exc:
-        # Cancelled dialogs and unsupported platforms both land here. A user
-        # who asked for a save dialog and silently got Downloads instead (or
-        # nothing at all) had no way to tell, so it is a warning.
+        # Unsupported platforms land here (ValueError on web/mobile without
+        # src_bytes). A user who asked for a save dialog and silently got
+        # Downloads instead had no way to tell, so it is a warning.
         LOG.warning("save_file unavailable (%s); using Downloads", exc)
+        dialog_failed = True
+    if destination is None and not dialog_failed:
+        # Cancelled dialog: save_file returns None WITHOUT raising. Writing
+        # to Downloads anyway violates the cancel contract — return None so
+        # the caller reports "not saved", not a file the user rejected.
+        LOG.info("save_file cancelled by user; nothing written")
+        return None
 
+    # Sanitize: an unsanitized filename with ../ escapes the directory.
+    safe_name = Path(filename).name or "export.txt"
     try:
         if destination:
             path = Path(destination)
         else:
             directory = _downloads_dir(page)
             directory.mkdir(parents=True, exist_ok=True)
-            path = _unique_path(directory, filename)
+            path = _unique_path(directory, safe_name)
         path.write_text(content, encoding="utf-8")
-    except OSError as exc:
-        LOG.warning("could not write %s: %s", filename, exc)
+    except (OSError, ValueError) as exc:
+        LOG.warning("could not write %s: %s", safe_name, exc)
         return None
     return str(path)

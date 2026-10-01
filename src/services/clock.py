@@ -44,12 +44,16 @@ def prompt_line() -> str:
 
 def with_clock(system_prompt: str, enabled: bool) -> str:
     """Append the clock line to the system prompt when enabled."""
+    import re as _re
+
     base = (system_prompt or "").strip()
     if not enabled:
         return base
+    # Strip stale clock lines first: the line embeds seconds, so an exact
+    # `line in base` check misses a line stamped a second earlier and long
+    # sessions accumulate duplicate clock lines.
+    base = _re.sub(r"(?m)^Current date and time:.*(?:\n|$)", "", base).strip()
     line = prompt_line()
-    if line in base:
-        return base
     return f"{base}\n\n{line}" if base else line
 
 

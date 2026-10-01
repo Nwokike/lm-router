@@ -12,6 +12,12 @@ Python's own `socket`/`ssl`/`http.client`:
   2. Open a raw TCP connection to the relay on the returned port.
   3. Splice bytes both ways to the local gateway.
 
+SECURITY NOTE: the device-to-relay leg is PLAIN TCP to a third-party relay
+(localtunnel.me) — the operator and any network observer on that path can
+read proxied bytes. The end-user browser leg (https://*.loca.lt) is TLS
+terminated at the edge, but that does not protect device-to-edge. Prefer
+auth ON, rotate the share key after each share.
+
 No new dependency, no installed binary, nothing to configure. Verified working
 end-to-end before this was written.
 """
@@ -72,12 +78,31 @@ class LocalTunnel:
     # ── setup ─────────────────────────────────────────────────────────
     def start(self, timeout: float = 20.0) -> str:
         """Claim a subdomain and begin pumping. Returns the public URL."""
+        if self._stop.is_set():
+            raise TunnelError("This tunnel was stopped and cannot be restarted.")
         payload = self._claim()
         self.public_url = str(payload.get("url") or "")
         if not self.public_url:
             raise TunnelError("Tunnel service did not return a public URL.")
-        self._host = urlparse(self.public_url).hostname or "localtunnel.me"
-        self._relay_port = int(payload.get("port") or 443)
+        host = urlparse(self.public_url).hostname or ""
+        # Validate the claim: a compromised response pointing the relay at an
+        # arbitrary host would pump local gateway bytes to it.
+        if not host or not (
+            host == "localtunnel.me"
+            or host.endswith(".loca.lt")
+            or host.endswith(".localtunnel.me")
+        ):
+            raise TunnelError(f"Tunnel service returned an unexpected host: {host!r}.")
+        try:
+            relay_port = int(payload.get("port") or 0)
+        except TypeError, ValueError:
+            relay_port = 0
+        if relay_port <= 0:
+            # A missing port used to silently fall back to 443 (raw TCP to a
+            # TLS port hangs/fails); fail loudly instead.
+            raise TunnelError("Tunnel service did not return a relay port.")
+        self._host = host
+        self._relay_port = relay_port
         self._max_conns = max(1, int(payload.get("max_conn_count") or 2))
         LOG.info("tunnel claimed: %s", self.public_url)
         for index in range(self._max_conns):

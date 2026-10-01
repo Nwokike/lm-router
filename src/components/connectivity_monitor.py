@@ -5,8 +5,6 @@ transient NONE reports on resume do not flash the banner, with a 5s poll
 fallback for platforms where on_change is unreliable.
 """
 
-import asyncio
-
 import anyio
 import flet as ft
 
@@ -21,14 +19,18 @@ _CHECK_TIMEOUT = 5
 async def _http_online() -> bool:
     import urllib.request
 
+    import anyio
+
     from core import constants
 
     try:
         req = urllib.request.Request(
             _CHECK_URL,
-            method="HEAD",
+            method="GET",
             # House rule: an explicit User-Agent on every HTTP call — this
-            # probe was the last one sending Python-urllib/3.x.
+            # probe was the last one sending Python-urllib/3.x. GET, not
+            # HEAD: middleboxes answer 405 to HEAD on this endpoint and a
+            # false offline is a wrong claim to the user.
             headers={"User-Agent": f"LM-Router/{constants.APP_VERSION}"},
         )
 
@@ -38,7 +40,8 @@ async def _http_online() -> bool:
             with urllib.request.urlopen(req, timeout=_CHECK_TIMEOUT) as resp:  # noqa: S310
                 return resp.status == 204
 
-        return await asyncio.to_thread(_probe)
+        # anyio-native (not asyncio.to_thread): correct on any backend.
+        return await anyio.to_thread.run_sync(_probe)
     except Exception as exc:
         # A probe failure is what flips the "You're offline" banner, and a
         # false offline is a wrong claim to the user. Leave a trace.

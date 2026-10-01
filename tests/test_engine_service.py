@@ -196,8 +196,9 @@ def test_download_sends_a_user_agent(monkeypatch) -> None:
     seen: dict = {}
 
     class _Resp:
-        def read(self):
-            return b'VERSION = "1.0.0"\nif __name__ == "__main__":\n    pass\n'
+        def read(self, n: int = -1):
+            data = b'VERSION = "1.0.0"\nif __name__ == "__main__":\n    pass\n'
+            return data[:n] if n is not None and n >= 0 else data
 
         def __enter__(self):
             return self
@@ -286,8 +287,9 @@ def test_download_retries_once_then_raises(monkeypatch) -> None:
         def __exit__(self, *exc):
             return False
 
-        def read(self):
-            return b'VERSION = "1.0.0"\nif __name__ == "__main__":\n    pass'
+        def read(self, n: int = -1):
+            data = b'VERSION = "1.0.0"\nif __name__ == "__main__":\n    pass'
+            return data[:n] if n is not None and n >= 0 else data
 
     calls = {"n": 0}
 

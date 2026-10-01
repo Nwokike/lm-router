@@ -45,12 +45,14 @@ def build_about_dialog(
 
     return ft.AlertDialog(
         modal=True,
+        shape=ft.RoundedRectangleBorder(radius=tokens.RADIUS_LG),
         title=ft.Row(
             spacing=tokens.SPACE_SM,
             controls=[
                 ft.Icon(ft.Icons.ROUTER_ROUNDED, color=theme.PRIMARY),
                 ft.Text(
                     f"{constants.APP_NAME} {constants.APP_VERSION}",
+                    size=tokens.FONT_TITLE,
                     weight=ft.FontWeight.BOLD,
                 ),
             ],

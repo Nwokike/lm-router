@@ -28,7 +28,10 @@ def build_log_terminal(
     methods,
 ) -> ft.AlertDialog:
     """Read-only terminal: refresh, copy all, close."""
-    lines = [f"{r['ts']}  {r.get('level', 'INFO'):<7}  {r['msg']}" for r in records()[-_MAX_LINES:]]
+    lines = [
+        f"{r.get('ts', '')}  {r.get('level', 'INFO'):<7}  {r.get('msg', '')}"
+        for r in records()[-_MAX_LINES:]
+    ]
     body = "\n".join(lines) or "No log output yet."
 
     return ft.AlertDialog(

@@ -19,39 +19,76 @@ def HistoryScreen():
         c for c in state.conversations if not q or q in c.get("title", "").lower()
     ]
 
+    def _confirm(title: str, message: str, confirm_label: str, action) -> None:
+        # Irreversible deletes go behind an AlertDialog: one misclick used to
+        # wipe a conversation (or ALL of them) with no undo.
+        page = getattr(ft.context, "page", None)
+        if page is None:
+            action()
+            return
+
+        def _do(_=None) -> None:
+            page.pop_dialog()
+            action()
+
+        page.show_dialog(
+            ft.AlertDialog(
+                modal=True,
+                title=ft.Text(title),
+                content=ft.Text(message),
+                actions=[
+                    ft.TextButton("Cancel", on_click=lambda _: page.pop_dialog()),
+                    ft.TextButton(confirm_label, on_click=_do),
+                ],
+            )
+        )
+
     rows: list[ft.Control] = []
     for conversation in filtered_conversations:
-        cid = conversation["id"]
+        cid = str(conversation.get("id") or "")
+        if not cid:
+            continue
+        title = conversation.get("title") or "Untitled"
         rel = conversation.get("relative", "")
         updated = conversation.get("updated", "")
         time_display = f"{rel} · {updated}" if rel and updated else (rel or updated)
+        is_active = cid == state.active_conversation
 
+        body: list[ft.Control] = [
+            ft.Text(
+                title,
+                size=tokens.FONT_MD,
+                max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS,
+            ),
+        ]
+        if time_display:
+            body.append(
+                ft.Text(
+                    time_display,
+                    size=tokens.FONT_XS,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                ),
+            )
         rows.append(
             ft.Container(
                 padding=tokens.SPACE_MD,
                 border_radius=tokens.RADIUS_MD,
                 bgcolor=ft.Colors.SURFACE_CONTAINER,
+                # Active-conversation affordance: the list used to look
+                # unchanged after Open.
+                border=ft.Border.all(1, ft.Colors.PRIMARY) if is_active else None,
+                # Whole-card tap opens: only the "Open" text used to work.
+                ink=True,
+                on_click=lambda e, c=cid: methods.open_conversation(c),
                 content=ft.Row(
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     controls=[
                         ft.Column(
                             spacing=tokens.SPACE_XXS,
-                            tight=True,
                             expand=True,
-                            controls=[
-                                ft.Text(
-                                    conversation.get("title", "Untitled"),
-                                    size=tokens.FONT_MD,
-                                    max_lines=1,
-                                    overflow=ft.TextOverflow.ELLIPSIS,
-                                ),
-                                ft.Text(
-                                    time_display,
-                                    size=tokens.FONT_XS,
-                                    color=ft.Colors.ON_SURFACE_VARIANT,
-                                ),
-                            ],
+                            controls=body,
                         ),
                         ft.Row(
                             spacing=tokens.SPACE_XS,
@@ -70,7 +107,12 @@ def HistoryScreen():
                                     ft.Icons.DELETE_OUTLINE,
                                     icon_size=tokens.ICON_SM,
                                     tooltip="Delete",
-                                    on_click=lambda e, c=cid: methods.delete_conversation(c),
+                                    on_click=lambda e, c=cid, t=title: _confirm(
+                                        "Delete conversation?",
+                                        f'"{t}" will be permanently deleted.',
+                                        "Delete",
+                                        lambda: methods.delete_conversation(c),
+                                    ),
                                 ),
                             ],
                         ),
@@ -135,7 +177,13 @@ def HistoryScreen():
                                 ft.TextButton(
                                     "Clear all",
                                     style=ft.ButtonStyle(color=ft.Colors.ERROR),
-                                    on_click=lambda _: methods.clear_history(),
+                                    on_click=lambda _: _confirm(
+                                        "Clear all conversations?",
+                                        f"{len(filtered_conversations)} conversation(s) "
+                                        "will be permanently deleted.",
+                                        "Clear all",
+                                        methods.clear_history,
+                                    ),
                                 ),
                             ],
                         ),
