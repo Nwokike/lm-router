@@ -260,6 +260,20 @@ def SessionBar(
     model_pill = ModelPicker(state=state, methods=methods, is_dark=is_dark)
 
     mcp_count = len(state.mcp_tools)
+    # Honest connecting state: the owner connects async after boot, so the
+    # pill reads empty until the first _status lands. A spinner + "Tools…"
+    # beats a bare label that looks broken (ModelPicker's discovering twin).
+    mcp_connecting = bool(getattr(state, "mcp_connecting", False)) and not mcp_count
+    lead_icon: ft.Control = (
+        ft.ProgressRing(width=tokens.ICON_XS, height=tokens.ICON_XS, stroke_width=2)
+        if mcp_connecting
+        else ft.Icon(
+            ft.Icons.HUB_ROUNDED if mcp_count else ft.Icons.HUB_OUTLINED,
+            size=tokens.ICON_XS,
+            color=theme.PRIMARY if mcp_count else theme.dim(is_dark),
+        )
+    )
+    mcp_label = "Tools…" if mcp_connecting else (f"Tools {mcp_count}" if mcp_count else "Tools")
     mcp_pill = ft.Container(
         ink=True,
         padding=ft.Padding.symmetric(horizontal=tokens.SPACE_SNUG, vertical=tokens.SPACE_TIGHT),
@@ -269,18 +283,14 @@ def SessionBar(
             theme.PRIMARY if mcp_count else theme.dim(is_dark),
         ),
         on_click=lambda _: methods.open_mcp_tools(),
-        tooltip="MCP tools",
+        tooltip="Connecting to tools…" if mcp_connecting else "Tools",
         content=ft.Row(
             spacing=tokens.SPACE_TIGHT,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
             controls=[
-                ft.Icon(
-                    ft.Icons.HUB_ROUNDED if mcp_count else ft.Icons.HUB_OUTLINED,
-                    size=tokens.ICON_XS,
-                    color=theme.PRIMARY if mcp_count else theme.dim(is_dark),
-                ),
+                lead_icon,
                 ft.Text(
-                    f"MCP {mcp_count}" if mcp_count else "MCP",
+                    mcp_label,
                     size=tokens.FONT_XS,
                     weight=ft.FontWeight.W_600,
                     color=theme.PRIMARY if mcp_count else theme.dim(is_dark),

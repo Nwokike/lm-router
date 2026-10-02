@@ -1438,6 +1438,14 @@ def SettingsScreen():
                             ],
                         )
                     )
+            elif getattr(state, "mcp_connecting", False):
+                tool_panel.append(
+                    ft.Text(
+                        "Connecting… tools appear when the server answers.",
+                        size=tokens.FONT_XS,
+                        color=ft.Colors.ON_SURFACE_VARIANT,
+                    ),
+                )
             else:
                 tool_panel.append(
                     ft.Text(

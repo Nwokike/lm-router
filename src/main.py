@@ -376,7 +376,10 @@ class AppController:
 
     def _open_mcp_tools(self) -> None:
         if not state.mcp_tools:
-            self._notify_error("No MCP tools active. Add a server in Settings -> MCP.")
+            if getattr(state, "mcp_connecting", False):
+                self._notify_info("Connecting to tools… try again in a moment.")
+            else:
+                self._notify_error("No tools active. Add a server in Settings -> MCP.")
             return
         rows: list[ft.Control] = []
         for server in self.settings.mcp_servers:
@@ -401,11 +404,11 @@ class AppController:
                     )
                 )
         if not rows:
-            self._notify_error("MCP servers are enabled but exposed no tools.")
+            self._notify_error("Servers are enabled but exposed no tools.")
             return
         dialog = ft.AlertDialog(
             modal=True,
-            title=ft.Text("MCP tools"),
+            title=ft.Text("Tools"),
             content=ft.Container(
                 width=420,
                 height=320,
@@ -779,7 +782,7 @@ class AppController:
                         "content": (
                             "The request took too long with no reply (3 minutes). "
                             "The turn was stopped. Try again, or disable slow "
-                            "MCP servers in Settings."
+                            "tools in Settings."
                         ),
                         "kind": "timeout",
                     }
@@ -918,10 +921,10 @@ class AppController:
             return
         tool_err = agent.consume_tools_error()
         if tool_err:
-            # A broken tool registry used to silently drop search/MCP
+            # A broken tool registry used to silently drop search/tools
             # (audit D): tell the user the turn is running degraded.
             self._in_flet_ctx(self._notify_error)(
-                f"Tools unavailable. Running without search/MCP ({tool_err[:100]}).",
+                f"Tools unavailable. Running without search/tools ({tool_err[:100]}).",
             )
         index = self._in_flet_ctx(self._begin_turn)(text)
         if index is None:
@@ -1396,10 +1399,12 @@ class AppController:
                 # undefined behaviour. The returned future completes with
                 # the owner task, so existing join logic is unaffected.
                 self._mcp_future = asyncio.run_coroutine_threadsafe(self.services.mcp.serve(), loop)
+                state.mcp_connecting = True
             else:
                 # Pre-loop fallback; portal-bound again, but serve() is
                 # shielded (park-loop catches) so the portal stays up.
                 self._mcp_future = self.services.agent.spawn(self.services.mcp.serve)
+                state.mcp_connecting = True
         except Exception as exc:
             name = str(exc) or type(exc).__name__
             LOG.warning("mcp owner task not started: %s", name)
@@ -1417,6 +1422,7 @@ class AppController:
         anything, so ensure it first.
         """
         self._ensure_mcp_owner()
+        state.mcp_connecting = True
         self.services.mcp.request_reconnect()
 
     def _mcp_status(self, names: list[str] | None, error: str | None) -> None:
@@ -1424,6 +1430,9 @@ class AppController:
 
         def _apply() -> None:
             state.mcp_tools = names or []
+            # Every _connect path ends in _status, so clearing here covers
+            # all ends (success, partial, failure, empty config).
+            state.mcp_connecting = False
             if names:
                 LOG.info("mcp tools active: %d", len(names))
             if error:

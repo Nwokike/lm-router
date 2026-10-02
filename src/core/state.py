@@ -54,6 +54,9 @@ class AppState:
 
     # Settings: server-ids with an in-flight "Test" (spinner + re-click guard)
     mcp_testing: frozenset = frozenset()
+    # True while the MCP owner is (re)connecting: tools lists read empty in
+    # that window, so surfaces show "connecting" instead of "no tools".
+    mcp_connecting: bool = False
     # Model test bench (console parity): sweep state + per-row verdicts.
     model_testing: frozenset = frozenset()
     retesting: bool = False

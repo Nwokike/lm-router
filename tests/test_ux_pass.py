@@ -69,7 +69,7 @@ def test_no_search_pill_in_session_bar(_renderer_page) -> None:
     texts = [str(getattr(n, "value", "")) for n in _walk_all(tree) if type(n).__name__ == "Text"]
     blob = " ".join(texts)
     assert "Internet" not in blob, f"search pill still rendered: {blob[:400]}"
-    assert "MCP" in blob
+    assert "Tools" in blob
 
 
 def test_chat_header_has_new_chat(_renderer_page) -> None:
