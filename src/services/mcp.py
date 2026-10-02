@@ -662,6 +662,17 @@ class MCPHub:
     async def close(self) -> None:
         await self._close_owned()
 
+    async def test_on_owner(self, server: MCPServerConfig) -> list[dict]:
+        """Test entry point for the MCP OWNER task (not the agent portal).
+
+        hub.test() runs its own SDK task group: executed on the agent portal
+        it contends with the live turn's group (cross-task cancel-scope
+        fallout), and the Test button empirically unblocked hung turns — the
+        probe perturbed whatever the turn was stuck on. The owner loop is the
+        task that holds every other MCP context, so probes belong there.
+        """
+        return await self.test(server)
+
     async def test(self, server: MCPServerConfig) -> list[dict]:
         """Short-lived connect + list_tools with schema validation for the Settings UI."""
         try:

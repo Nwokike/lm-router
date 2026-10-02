@@ -142,30 +142,75 @@ def _default_engine_factory(
     return engine
 
 
+def _message_role(message: Any) -> str:
+    """Lowercase role string across kani shapes.
+
+    ChatRole is a str-Enum whose str() is "ChatRole.function" (NOT
+    "function"), so `str(role).lower()` never matches — read .value first.
+    """
+    role = getattr(message, "role", "")
+    value = getattr(role, "value", None)
+    if isinstance(value, str):
+        return value.lower()
+    if isinstance(role, str):
+        return role.lower()
+    return str(role).lower()
+
+
+def _assistant_tool_call_ids(message: Any) -> set[str]:
+    """The tool_call ids an assistant message's tool_calls claim."""
+    ids: set[str] = set()
+    try:
+        for tc in getattr(message, "tool_calls", None) or []:
+            call_id = getattr(tc, "id", None)
+            if call_id:
+                ids.add(str(call_id))
+    except Exception as exc:
+        LOG.debug("tool_call id extraction failed: %s", exc)
+    return ids
+
+
 def _drop_orphan_function_messages(messages: list) -> list:
     """Remove function messages whose paired call is no longer present.
 
     Trimming oldest-first can cut a message pair in half. kani then sends a
-    tool result with no preceding call, which the provider rejects or the
-    model answers to as if it were a user turn.
+    tool result with no preceding call, which the provider rejects ("expected
+    a FUNCTION message to satisfy the pending tool call") and every later
+    turn fails the same way until the conversation is reset.
+
+    Pairing is by tool_call_id, not by text search or a 2-message window:
+    the old heuristic keyed on "call_" appearing in the result TEXT (tool
+    results almost never contain it) and only looked two messages back, so
+    it kept orphans and dropped valid results after any mid-history cut.
     """
+    live_ids: set[str] = set()
+    for message in messages:
+        if "assistant" in _message_role(message):
+            live_ids |= _assistant_tool_call_ids(message)
     kept: list = []
     for message in messages:
-        role = str(getattr(message, "role", "") or "")
-        text = str(getattr(message, "text", "") or "")
-        if (
-            role == "function"
-            and "call_" not in text
-            and not any(
-                str(getattr(m, "role", "")) == "assistant" and getattr(m, "tool_calls", None)
-                for m in kept[-2:]
-            )
-        ):
-            # No call in the immediately preceding assistant turn.
-            if not any(getattr(m, "tool_calls", None) for m in kept[-2:]):
+        role = _message_role(message)
+        if role == "function" or "tool" in role:
+            call_id = getattr(message, "tool_call_id", None)
+            if call_id is not None and str(call_id) not in live_ids:
                 continue
         kept.append(message)
     return kept
+
+
+def _pending_tool_call_ids(messages: list) -> set[str]:
+    """Assistant-claimed tool_call ids with no matching function result."""
+    claimed: set[str] = set()
+    answered: set[str] = set()
+    for message in messages:
+        role = _message_role(message)
+        if "assistant" in role:
+            claimed |= _assistant_tool_call_ids(message)
+        elif role == "function" or "tool" in role:
+            call_id = getattr(message, "tool_call_id", None)
+            if call_id is not None:
+                answered.add(str(call_id))
+    return claimed - answered
 
 
 def _usage_from(message: Any) -> dict | None:
@@ -562,11 +607,34 @@ class AgentService:
             )
             # A tool call and its result are one unit: dropping the call but
             # keeping the result (or the reverse) produces an invalid
-            # transcript, which models answer to badly or not at all.
+            # transcript, which models answer to as if it were a user turn.
             trimmed = _drop_orphan_function_messages(trimmed)
             kani.chat_history.clear()
             kani.chat_history.extend(trimmed)
             LOG.info("trimmed %d messages from chat history", dropped)
+
+        # Transcript guard: an assistant turn that claimed tool calls but has
+        # no matching function results poisons EVERY later turn — the
+        # provider rejects each one ("expected a FUNCTION message to satisfy
+        # the pending tool call") until the conversation is reset. This is
+        # the hang the owner reported: no error row, spinner, and pressing
+        # Test in Settings unblocked it (portal activity let the wedged turn
+        # time out). Evict the dangling assistant claim before sending.
+        pending = _pending_tool_call_ids(kani.chat_history)
+        if pending:
+            LOG.warning(
+                "dropping %d dangling tool claim(s) %s before send",
+                len(pending),
+                sorted(pending)[:3],
+            )
+            cleaned = [
+                m
+                for m in kani.chat_history
+                if not ("assistant" in _message_role(m) and _assistant_tool_call_ids(m) & pending)
+            ]
+            cleaned = _drop_orphan_function_messages(cleaned)
+            kani.chat_history.clear()
+            kani.chat_history.extend(cleaned)
 
         def _safe_callback(label: str, fn: Callable[[], None]) -> None:
             # A UI callback raising mid-turn used to abort the async-for and

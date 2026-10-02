@@ -1509,7 +1509,6 @@ class AppController:
 
     def _test_mcp_server(self, server_id: str, done_cb) -> None:
         hub = self.services.mcp
-        agent = self.services.agent
         target = next((s for s in self.settings.mcp_servers if s.id == server_id), None)
         if target is None:
             done_cb(("err", "Server not found."))
@@ -1519,16 +1518,24 @@ class AppController:
             async def probe() -> list:
                 # Bounded: MCP's own read timeout is 300s — a stalled server
                 # must never look like a dead button (settings audit: 75s+
-                # hangs with no done_cb). 20s cap on the portal loop.
-                return await asyncio.wait_for(hub.test(target), timeout=20.0)
+                # hangs with no done_cb). 20s cap on the owner loop.
+                return await asyncio.wait_for(hub.test_on_owner(target), timeout=20.0)
 
             def deliver(result: tuple) -> None:
                 # done() writes observables — must run in the Flet context or
                 # the spinner can stick forever (forensics R5).
                 self._in_flet_ctx(done_cb)(result)
 
+            # Owner loop, NOT agent.call: the probe runs its own SDK task
+            # group, and on the agent portal it contends with the live turn's
+            # group — empirically, pressing Test unblocked hung turns, which
+            # is cross-task interference, not a fix. run_coroutine_threadsafe
+            # also never raises "portal is not running" into a restart storm.
+            loop = self._ui_loop
             try:
-                names = agent.call(probe)
+                if loop is None or loop.is_closed():
+                    raise RuntimeError("UI loop unavailable for MCP test.")
+                names = asyncio.run_coroutine_threadsafe(probe(), loop).result(timeout=25)
             except TimeoutError:
                 deliver(("err", "Timed out after 20s. Check the URL or command."))
                 return
