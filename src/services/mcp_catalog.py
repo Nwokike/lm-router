@@ -10,13 +10,19 @@ v1 is deliberately header-auth only: servers behind OAuth (Notion, Figma,
 Linear, Sentry...) need a real sign-in flow and stay out until we build one.
 """
 
+# Stable id of the protected built-in entry. Seeded on boot when missing;
+# never duplicated, never re-added, never deletable (only disablable).
+BUILTIN_EXA_ID = "builtin-exa"
+BUILTIN_EXA_URL = "https://mcp.exa.ai/mcp"
+
 PRESETS: tuple[dict, ...] = (
     # ---- keyless: one tap and it connects ----
     {
         "id": "exa",
         "name": "Exa",
-        "url": "https://mcp.exa.ai/mcp",
+        "url": BUILTIN_EXA_URL,
         "auth": None,
+        "builtin": True,
         "description": (
             "Searches the web and reads pages for you, so answers come with "
             "real sources instead of guesses."
@@ -156,9 +162,13 @@ def preset_payload(preset: dict, api_key: str = "") -> dict:
     key = str(api_key or "").strip()
     if preset.get("auth") and key:
         headers["Authorization"] = f"Bearer {key}"
-    return {
+    payload: dict = {
         "name": str(preset["name"]),
         "transport": "streamable_http",
         "url": str(preset["url"]),
         "headers": headers,
     }
+    if preset.get("builtin"):
+        payload["id"] = BUILTIN_EXA_ID
+        payload["protected"] = True
+    return payload

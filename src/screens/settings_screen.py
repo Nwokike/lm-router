@@ -1467,9 +1467,32 @@ def SettingsScreen():
                                     spacing=tokens.SPACE_XXS,
                                     tight=True,
                                     controls=[
-                                        ft.Text(server.name, size=tokens.FONT_MD),
+                                        ft.Row(
+                                            spacing=tokens.SPACE_XXS,
+                                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                            controls=[
+                                                ft.Text(server.name, size=tokens.FONT_MD),
+                                                *(
+                                                    [
+                                                        ft.Icon(
+                                                            ft.Icons.LOCK_OUTLINE,
+                                                            size=tokens.ICON_XS,
+                                                            color=ft.Colors.ON_SURFACE_VARIANT,
+                                                            tooltip="Built in: can't be removed",
+                                                        )
+                                                    ]
+                                                    if getattr(server, "protected", False)
+                                                    else []
+                                                ),
+                                            ],
+                                        ),
                                         ft.Text(
-                                            status_text,
+                                            (
+                                                "Built in · "
+                                                if getattr(server, "protected", False)
+                                                else ""
+                                            )
+                                            + status_text,
                                             size=tokens.FONT_XS,
                                             color=ft.Colors.ON_SURFACE_VARIANT,
                                         ),
@@ -1502,13 +1525,19 @@ def SettingsScreen():
                                                 methods.toggle_mcp_server(sid)
                                             ),
                                         ),
-                                        ft.IconButton(
-                                            ft.Icons.DELETE_OUTLINE,
-                                            icon_size=tokens.ICON_SM,
-                                            tooltip="Remove",
-                                            on_click=lambda e, sid=server.id: (
-                                                methods.remove_mcp_server(sid)
-                                            ),
+                                        *(
+                                            []
+                                            if getattr(server, "protected", False)
+                                            else [
+                                                ft.IconButton(
+                                                    ft.Icons.DELETE_OUTLINE,
+                                                    icon_size=tokens.ICON_SM,
+                                                    tooltip="Remove",
+                                                    on_click=lambda e, sid=server.id: (
+                                                        methods.remove_mcp_server(sid)
+                                                    ),
+                                                )
+                                            ]
                                         ),
                                     ],
                                 ),

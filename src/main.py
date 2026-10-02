@@ -264,7 +264,6 @@ class AppController:
         m.copy_text = self._copy_text
         m.copy_logs = self._copy_logs
         m.export_conversation = self._export_conversation
-        m.toggle_search_tool = self._toggle_search_tool
         m.open_mcp_tools = self._open_mcp_tools
         m.dismiss_notice = self._dismiss_notice
         m.check_update = lambda: self.page.run_task(self._check_update)
@@ -374,13 +373,6 @@ class AppController:
             show_snack(self.page, message, duration=2500, floating=True)
 
         self._run_on_ui(_apply)()
-
-    def _toggle_search_tool(self) -> None:
-        self.settings.search_enabled = not self.settings.search_enabled
-        self.settings.save()
-        state.search_enabled = self.settings.search_enabled
-        state.settings_version += 1
-        LOG.info("web search tool: %s", "on" if state.search_enabled else "off")
 
     def _open_mcp_tools(self) -> None:
         if not state.mcp_tools:
@@ -1474,6 +1466,10 @@ class AppController:
         return True
 
     def _remove_mcp_server(self, server_id: str) -> None:
+        target = next((s for s in self.settings.mcp_servers if s.id == server_id), None)
+        if target is not None and getattr(target, "protected", False):
+            self._notify_info("Built-in server can't be removed. You can disable it.")
+            return
         self.settings.mcp_servers = [s for s in self.settings.mcp_servers if s.id != server_id]
         self.settings.save()
         # The Settings MCP list re-reads only on this snapshot bump — without

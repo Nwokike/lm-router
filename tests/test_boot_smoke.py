@@ -303,7 +303,9 @@ def test_mcp_owner_spawned_without_configured_servers(boot_page) -> None:
     controller.init()
     boot_page.drain()
 
-    assert controller.services.settings.mcp_servers == [], "precondition: fresh config"
+    # Fresh config seeds exactly the protected builtin (Exa): the owner
+    # still starts with zero *user* servers, and the task must spawn anyway.
+    assert [s.name for s in controller.services.settings.mcp_servers] == ["Exa"]
     assert controller._mcp_future is not None, "owner task must spawn unconditionally"
 
     # Idempotent: a live owner is never double-spawned.
@@ -621,7 +623,7 @@ def test_mcp_mutators_bump_the_settings_snapshot(boot_page) -> None:
     )
     assert state.settings_version == before + 1, "add must bump the snapshot"
     assert controller.settings.mcp_servers, "precondition: the server was stored"
-    server_id = controller.settings.mcp_servers[0].id
+    server_id = next(s.id for s in controller.settings.mcp_servers if s.name == "probe")
 
     before = state.settings_version
     controller.methods.toggle_mcp_server(server_id)
@@ -634,7 +636,8 @@ def test_mcp_mutators_bump_the_settings_snapshot(boot_page) -> None:
     before = state.settings_version
     controller.methods.remove_mcp_server(server_id)
     assert state.settings_version == before + 1, "remove must bump the snapshot"
-    assert not controller.settings.mcp_servers
+    # The protected builtin survives: only the user-added probe is gone.
+    assert [s.name for s in controller.settings.mcp_servers] == ["Exa"]
 
 
 def test_mcp_owner_ui_loop_spawn_receives_a_coroutine(boot_page) -> None:
@@ -722,11 +725,12 @@ def test_add_mcp_server_reports_rejection_instead_of_implied_success(boot_page) 
         is False
     )
 
-    # Cleanup: never leave test servers in the owner's settings.
+    # Cleanup: never leave test servers in the owner's settings. The
+    # protected builtin is not ours to remove — only the "good" probe.
     for server in list(controller.settings.mcp_servers):
         if server.name == "good":
             controller.methods.remove_mcp_server(server.id)
-    assert not controller.settings.mcp_servers
+    assert [s.name for s in controller.settings.mcp_servers] == ["Exa"]
 
 
 def test_search_enabled_save_syncs_the_chat_pill_observable(boot_page) -> None:

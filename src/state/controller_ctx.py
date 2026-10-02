@@ -28,7 +28,6 @@ class ControllerMethods:
     edit_last_user: Callable[[str], None] = _noop
     stop_generation: Callable[[], None] = _noop
     set_model: Callable[[str], None] = _noop
-    toggle_search_tool: Callable[[], None] = _noop
     open_mcp_tools: Callable[[], None] = _noop
     new_conversation: Callable[[], None] = _noop
     open_conversation: Callable[[str], None] = _noop

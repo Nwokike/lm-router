@@ -43,6 +43,32 @@ def _new_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+def _ensure_builtin_servers(servers: list) -> None:
+    """Seed the protected built-in entries (Exa search) when missing.
+
+    Idempotent: matches by stable id OR normalized URL, so a user's manual
+    Exa counts as present (never duplicated) and legacy stores gain the
+    entry exactly once. Runs inside from_stored, so every load path —
+    boot, tests, controller — converges without a separate migration.
+    """
+    # Local import: services.mcp_catalog is a leaf, settings must stay
+    # import-light at module top (core is imported by services).
+    from services import mcp_catalog as _catalog
+
+    have_ids = {getattr(s, "id", "") for s in servers}
+    have_urls = {str(getattr(s, "url", "") or "").rstrip("/").lower() for s in servers}
+    for preset in _catalog.PRESETS:
+        if not preset.get("builtin"):
+            continue
+        want_url = str(preset["url"]).rstrip("/").lower()
+        if _catalog.BUILTIN_EXA_ID in have_ids or want_url in have_urls:
+            continue
+        try:
+            servers.append(MCPServerConfig(**_catalog.preset_payload(preset)))
+        except ValidationError as exc:
+            LOG.warning("builtin MCP seed skipped: %s", exc)
+
+
 class ProviderConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", validate_assignment=True)
 
@@ -88,6 +114,10 @@ class MCPServerConfig(BaseModel):
     sse_read_timeout: float | None = Field(default=None, gt=0)
     disabled_tools: list[str] = Field(default_factory=list)
     enabled: bool = True
+    # Built-in servers (Exa search) are seeded by the app, always on, and
+    # cannot be deleted — only disabled. The Settings row hides Delete and
+    # shows a lock instead; _remove_mcp_server refuses them outright.
+    protected: bool = False
 
     @field_validator("name", mode="before")
     @classmethod
@@ -267,6 +297,7 @@ class AppSettings(BaseSettings):
                     f"Skipped malformed MCP server '{raw_s.get('name', '?')}'.",
                 )
 
+        _ensure_builtin_servers(stored_servers)
         data["mcp_servers"] = stored_servers
 
         try:

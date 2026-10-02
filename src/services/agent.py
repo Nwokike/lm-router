@@ -30,6 +30,7 @@ from core.catalog import api_type_for, rate_limit_advice
 from core.logging import LOG
 from core.settings import AppSettings
 from core.state import state
+from services.guard_kani import GuardedKani
 from services.reasoning import (
     ReasoningEngine,
     ThoughtTap,
@@ -483,7 +484,10 @@ class AgentService:
         http_client = inner if isinstance(inner, httpx.AsyncClient) else None
         self._engine_client = sdk_client
         self._engine_http = http_client
-        self._kani = Kani(
+        # GuardedKani: per-tool 30s timeout inside do_function_call, so a
+        # hung MCP tool becomes an error FUNCTION result (model continues)
+        # instead of wedging the turn with busy stuck True.
+        self._kani = GuardedKani(
             engine,
             system_prompt=system_prompt or None,
             chat_history=history,

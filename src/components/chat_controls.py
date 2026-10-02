@@ -251,39 +251,13 @@ def SessionBar(
     methods,
     is_dark: bool,
 ):
-    """Model, search health and MCP count in one compact strip."""
-    model_pill = ModelPicker(state=state, methods=methods, is_dark=is_dark)
+    """Model picker and MCP count in one compact strip.
 
-    search_pill = ft.Container(
-        ink=True,
-        padding=ft.Padding.symmetric(horizontal=tokens.SPACE_SNUG, vertical=tokens.SPACE_TIGHT),
-        border_radius=tokens.RADIUS_PILL,
-        bgcolor=ft.Colors.with_opacity(
-            tokens.OPACITY_MEDIUM if state.search_enabled else tokens.OPACITY_FAINT,
-            theme.PRIMARY if state.search_enabled else theme.dim(is_dark),
-        ),
-        on_click=lambda _: methods.toggle_search_tool(),
-        tooltip="Toggle web search for this chat",
-        content=ft.Row(
-            spacing=tokens.SPACE_TIGHT,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            controls=[
-                ft.Icon(
-                    ft.Icons.PUBLIC_ROUNDED
-                    if state.search_enabled
-                    else ft.Icons.PUBLIC_OFF_ROUNDED,
-                    size=tokens.ICON_XS,
-                    color=theme.PRIMARY if state.search_enabled else theme.dim(is_dark),
-                ),
-                ft.Text(
-                    "Internet",
-                    size=tokens.FONT_XS,
-                    weight=ft.FontWeight.W_600,
-                    color=theme.PRIMARY if state.search_enabled else theme.dim(is_dark),
-                ),
-            ],
-        ),
-    )
+    No per-chat search toggle: search is always on when the global switch
+    (Settings, Web search) allows it. A pill the user must remember to flip
+    meant the model silently lost search with no explanation.
+    """
+    model_pill = ModelPicker(state=state, methods=methods, is_dark=is_dark)
 
     mcp_count = len(state.mcp_tools)
     mcp_pill = ft.Container(
@@ -327,7 +301,7 @@ def SessionBar(
             wrap=False,
             scroll=ft.ScrollMode.AUTO,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            controls=[model_pill, search_pill, mcp_pill],
+            controls=[model_pill, mcp_pill],
         ),
     )
 

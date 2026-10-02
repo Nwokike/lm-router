@@ -36,12 +36,16 @@ def test_payload_builder_sends_exactly_the_right_headers() -> None:
     by_id = {p["id"]: p for p in PRESETS}
 
     # Keyless: never sends headers, transports the url verbatim.
+    # The builtin Exa preset additionally carries its stable id + protected
+    # marker so the seeded entry can't be deleted.
     payload = preset_payload(by_id["exa"])
     assert payload == {
+        "id": "builtin-exa",
         "name": "Exa",
         "transport": "streamable_http",
         "url": "https://mcp.exa.ai/mcp",
         "headers": {},
+        "protected": True,
     }
 
     # Keyed + key: the standard bearer header GitHub's endpoint reads.

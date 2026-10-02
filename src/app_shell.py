@@ -10,7 +10,7 @@ import contextlib
 import flet as ft
 
 from components.app_header import AppHeader
-from core import tokens
+from core import theme, tokens
 from core.notify import show_snack
 from core.state import AppStateCtx
 from screens.chat_screen import ChatScreen
@@ -186,10 +186,27 @@ def AppShell():
                 AppHeader(
                     title="Chat",
                     extra_actions=[
+                        # DDGS tight pair: creation first, history next, no
+                        # gap between them. New chat lives here so starting
+                        # fresh never requires leaving the conversation.
+                        ft.IconButton(
+                            ft.Icons.ADD_ROUNDED,
+                            icon_size=18,
+                            icon_color=theme.PRIMARY,
+                            tooltip="New chat",
+                            style=ft.ButtonStyle(
+                                padding=ft.Padding(2, 6, 2, 6),
+                            ),
+                            on_click=lambda _: methods.new_conversation(),
+                        ),
                         ft.IconButton(
                             ft.Icons.HISTORY_ROUNDED,
-                            icon_size=tokens.ICON_MD,
+                            icon_size=18,
+                            icon_color=theme.PRIMARY,
                             tooltip="History",
+                            style=ft.ButtonStyle(
+                                padding=ft.Padding(2, 6, 2, 6),
+                            ),
                             on_click=lambda _: methods.set_tab(3),
                         ),
                     ],
