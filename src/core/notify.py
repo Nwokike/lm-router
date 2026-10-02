@@ -51,8 +51,15 @@ def show_snack(
             # Something is already on the dialog stack. Only a lingering
             # SnackBar may be replaced; a real dialog (About, update, logs)
             # belongs to the user and is left alone.
-            popped = page.pop_dialog()
+            try:
+                popped = page.pop_dialog()
+            except Exception as pop_exc:
+                # A dead page (closed loop, torn-down session) makes even
+                # the pop raise: log which toast died and move on. This was
+                # the "UI callback failed: _apply" line with no cause.
+                LOG.warning("show_snack pop failed for %r: %s", message[:60], pop_exc)
+                return
             if popped is None or isinstance(popped, ft.SnackBar):
                 page.show_dialog(snack)
     except Exception as exc:
-        LOG.warning("show_snack failed: %s", exc)
+        LOG.warning("show_snack failed for %r: %s", message[:60], exc)

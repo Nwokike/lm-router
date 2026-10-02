@@ -2226,13 +2226,25 @@ class AppController:
                     LOG.debug("ad close: %s", exc)
             self._destroy_window()
 
+        # Closed-loop guard: during teardown run_task itself raises
+        # ("Event loop is closed") and the old fallback called
+        # _destroy_window() synchronously — which schedules ANOTHER
+        # run_task on the dead loop, producing the "coroutine was never
+        # awaited" cascade (ads.close, window.destroy, _close_then_destroy).
         try:
+            loop = self._ui_loop
+            if loop is None or loop.is_closed():
+                LOG.debug("quit: UI loop already closed; skipping window teardown")
+                return
             self.page.run_task(_close_then_destroy)
         except Exception as exc:
             LOG.warning("quit failed: %s", exc)
             # Last resort: the run_task dispatch itself failed with the
             # latch already set, so still attempt window teardown directly.
             try:
+                loop = self._ui_loop
+                if loop is None or loop.is_closed():
+                    return
                 self._destroy_window()
             except Exception as destroy_exc:
                 LOG.warning("quit teardown failed: %s", destroy_exc)

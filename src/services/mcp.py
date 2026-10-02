@@ -163,10 +163,21 @@ def build_server_params(server: MCPServerConfig, is_mobile: bool = False) -> obj
             env=env,
             cwd=str(server.cwd) if server.cwd else None,
         )
-    url = str(server.url) if server.url else None
+    url = str(server.url).rstrip() if server.url else None
     if not url:
         raise MCPError("config", "remote server needs a url")
     headers = dict(server.headers) or None
+    # Trailing-slash redirect (Django 301): the SDK follows redirects only
+    # within the endpoint's origin AND keeps the method only for 307/308 —
+    # a 301 POST-redirect becomes an unfollowed error naming the slash URL.
+    # Normalize API-ish paths to the slash form up front so the handshake
+    # never depends on the server's redirect behavior.
+    if server.transport == "streamable_http" and "://" in url:
+        _head, _, tail = url.partition("://")
+        if "." in tail.split("/", 1)[0] and not tail.endswith("/"):
+            last = tail.rsplit("/", 1)[-1]
+            if "." not in last:
+                url = url + "/"
     if server.transport == "sse":
         # SSE param timeouts are plain seconds.
         kwargs: dict = {"url": url, "headers": headers}
@@ -270,10 +281,10 @@ def classify_exception(exc: Exception) -> MCPError:
     if "unauthorized" in lowered or "401" in text or "403" in text:
         return MCPError("auth", "Authentication failed. Check the headers or key.")
     if "405" in text or "method not allowed" in lowered:
-        return MCPError(
-            "protocol",
-            "Server refused the transport (405). Try the other transport, or check the URL path.",
-        )
+        hint = "Try the other transport, or check the URL path"
+        if "not followed" in lowered or "redirect" in lowered:
+            hint = "Try the URL with a trailing slash"
+        return MCPError("protocol", f"Server refused the transport (405). {hint}.")
     if (
         "protocol" in lowered
         or "-32601" in text
@@ -536,41 +547,70 @@ class MCPHub:
                 # just the exception (the kinds come from classify_exception,
                 # which unwraps TaskGroup wrappers to the real cause).
                 error = classify_exception(exc)
-                # Adaptive fallback: some servers (Django-style backends)
-                # reject the streamable POST handshake (405) but serve the
-                # older SSE transport on the same URL. Retry once as SSE
-                # before reporting the server dead — same headers, same
-                # timeout, same task.
+                # Adaptive fallback chain for streamable_http refusals (405):
+                # 1. Same URL as SSE (older transport, same endpoint).
+                # 2. Slash-toggled URL as streamable (Django 301: the SDK
+                #    only follows same-origin 307/308 for POST, so a slash
+                #    redirect surfaces as "not followed" instead of working).
+                # Same headers, same timeout, same task throughout.
                 if server.transport == "streamable_http" and (
-                    "405" in str(exc) or "method not allowed" in str(exc).lower()
+                    "405" in str(exc)
+                    or "method not allowed" in str(exc).lower()
+                    or "not followed" in str(exc).lower()
+                    or "redirect" in str(exc).lower()
                 ):
-                    LOG.info("mcp %s: streamable refused (405); retrying as SSE", server.name)
-                    await _drain_pending_clients()
-                    try:
-                        fallback = build_server_params(
-                            server.model_copy(update={"transport": "sse"}),
-                            is_mobile=self.is_mobile,
-                        )
-                        fallback_ctx = tools_from_mcp_servers(
-                            [fallback],
-                            blocked_tools=blocked or None,
-                            component_name_hook=lambda name, _info, label=server.name: (
-                                f"{label}.{name}"
-                            ),
-                        )
-                        async with asyncio.timeout(CONNECT_TIMEOUT):
-                            tools = await fallback_ctx.__aenter__()
-                    except Exception as fallback_exc:
+                    fallback_params: object | None = None
+                    fallback_label = ""
+                    sse_params = build_server_params(
+                        server.model_copy(update={"transport": "sse"}),
+                        is_mobile=self.is_mobile,
+                    )
+                    # Slash-toggled retry: build_server_params already
+                    # normalizes toward slash form, so strip-then-add covers
+                    # the (already-slashed) case too.
+                    alt_url = str(server.url).rstrip() + "/"
+                    slash_params = build_server_params(
+                        server.model_copy(
+                            update={
+                                "url": alt_url,
+                                "transport": "streamable_http",
+                            }
+                        ),
+                        is_mobile=self.is_mobile,
+                    )
+                    for label, params in (
+                        ("SSE", sse_params),
+                        ("slash-URL", slash_params),
+                    ):
+                        LOG.info("mcp %s: streamable refused; retrying as %s", server.name, label)
                         await _drain_pending_clients()
-                        LOG.warning(
-                            "mcp %s SSE fallback failed: %s",
-                            server.name,
-                            str(fallback_exc)[:140],
-                        )
+                        try:
+                            candidate = tools_from_mcp_servers(
+                                [params],
+                                blocked_tools=blocked or None,
+                                component_name_hook=lambda name, _info, label=server.name: (
+                                    f"{label}.{name}"
+                                ),
+                            )
+                            async with asyncio.timeout(CONNECT_TIMEOUT):
+                                tools = await candidate.__aenter__()
+                        except Exception as fallback_exc:
+                            await _drain_pending_clients()
+                            LOG.warning(
+                                "mcp %s %s fallback failed: %s",
+                                server.name,
+                                label,
+                                str(fallback_exc)[:140],
+                            )
+                            continue
+                        fallback_params = candidate
+                        fallback_label = label
+                        break
+                    if fallback_params is None:
                         failed.append(f"{server.name}: {error.kind} ({str(exc)[:100]})")
                         continue
-                    LOG.info("mcp %s connected via SSE fallback", server.name)
-                    contexts.append(fallback_ctx)
+                    LOG.info("mcp %s connected via %s fallback", server.name, fallback_label)
+                    contexts.append(fallback_params)
                     all_tools.extend(tools)
                     all_names.extend(str(getattr(t, "name", "?")) for t in tools)
                     continue
