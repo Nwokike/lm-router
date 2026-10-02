@@ -28,14 +28,16 @@ def live_tools_for(mcp_tools: list[str], server_name: str) -> list[str]:
     return [t[len(prefix) :] for t in mcp_tools if t.startswith(prefix)]
 
 
-def apply_api_key(headers: dict[str, str], api_key: str) -> dict[str, str]:
-    """The dedicated (optional) API key field fills the standard Authorization
-    header. Headers JSON stays the escape hatch for anything custom; a key in
-    the dedicated field wins for Authorization, because that is the field the
-    user deliberately filled in."""
+def apply_api_key(headers: dict[str, str], api_key: str, scheme: str = "bearer") -> dict[str, str]:
+    """The dedicated (optional) API key field fills the Authorization header.
+    Headers JSON stays the escape hatch for anything custom; a key in the
+    dedicated field wins for Authorization, because that is the field the
+    user deliberately filled in. Scheme is "bearer" (MCP norm) or "token"
+    (Django-style backends) — a Token server answers Bearer with 401/405."""
     if not api_key.strip():
         return dict(headers)
-    return {**headers, "Authorization": f"Bearer {api_key.strip()}"}
+    prefix = "Token" if scheme == "token" else "Bearer"
+    return {**headers, "Authorization": f"{prefix} {api_key.strip()}"}
 
 
 def _is_mobile_page(page) -> bool:
@@ -493,6 +495,7 @@ def SettingsScreen():
     m_env, set_m_env = ft.use_state("")
     m_cwd, set_m_cwd = ft.use_state("")
     m_api_key, set_m_api_key = ft.use_state("")
+    m_auth_scheme, set_m_auth_scheme = ft.use_state("bearer")
     m_timeout, set_m_timeout = ft.use_state("")
     m_sse_to, set_m_sse_to = ft.use_state("")
 
@@ -705,7 +708,7 @@ def SettingsScreen():
         # Authorization header so nobody has to hand-write Headers JSON for a
         # plain bearer token. Not every server needs one — it stays optional.
         if m_transport != "stdio" and m_api_key.strip():
-            headers = apply_api_key(headers, m_api_key)
+            headers = apply_api_key(headers, m_api_key, m_auth_scheme)
         # MCPServerConfig takes `command` (stdio) or `url` (remote). A single
         # `target` key is dropped by extra="ignore", so every add used to fail
         # validation while the screen still reported success.
@@ -714,6 +717,7 @@ def SettingsScreen():
             "name": m_name.strip(),
             "transport": m_transport,
             "headers": headers,
+            "auth_scheme": m_auth_scheme,
         }
         if m_transport == "stdio":
             # One pasted command line, as every MCP README writes it:
@@ -765,6 +769,7 @@ def SettingsScreen():
         set_m_env("")
         set_m_cwd("")
         set_m_api_key("")
+        set_m_auth_scheme("bearer")
         set_m_timeout("")
         set_m_sse_to("")
         set_m_headers("")
@@ -1147,10 +1152,8 @@ def SettingsScreen():
     )
 
     provider_rows: list = [
-        # Section header supplies the title; this row is the action. Owner:
-        # a single dim line read as filler and users scrolled straight past
-        # the feature — give it a bold lead line, say what it is, and label
-        # the button.
+        # Section header ("Providers") supplies the title; this row is the
+        # action: one lead line, one honest line, then the button.
         _pad(
             ft.Row(
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -1163,13 +1166,12 @@ def SettingsScreen():
                         expand=True,
                         controls=[
                             ft.Text(
-                                "Route chat through another OpenAI-compatible endpoint",
+                                "Add another provider",
                                 size=tokens.FONT_SM,
                                 weight=ft.FontWeight.W_600,
                             ),
                             ft.Text(
-                                "OpenRouter, your own server, or any compatible API. "
-                                "Keys stay on this device.",
+                                "Any OpenAI-compatible endpoint. Keys stay on this device.",
                                 size=tokens.FONT_XS,
                                 color=theme.dim(is_dark),
                             ),
@@ -1617,14 +1619,41 @@ def SettingsScreen():
                     if m_transport == "stdio"
                     else [
                         _pad(
-                            ft.TextField(
-                                label="API key (optional)",
-                                hint_text="sent as Authorization: Bearer ...",
-                                value=m_api_key,
-                                password=True,
-                                can_reveal_password=True,
-                                text_size=tokens.FONT_BODY_SM,
-                                on_change=lambda e: set_m_api_key(str(e.control.value or "")),
+                            ft.Row(
+                                spacing=tokens.SPACE_SM,
+                                vertical_alignment=ft.CrossAxisAlignment.END,
+                                controls=[
+                                    ft.TextField(
+                                        label="API key (optional)",
+                                        hint_text="the server's key, if it needs one",
+                                        value=m_api_key,
+                                        password=True,
+                                        can_reveal_password=True,
+                                        expand=True,
+                                        text_size=tokens.FONT_BODY_SM,
+                                        on_change=lambda e: set_m_api_key(
+                                            str(e.control.value or "")
+                                        ),
+                                    ),
+                                    ft.Dropdown(
+                                        label="Auth",
+                                        value=m_auth_scheme,
+                                        width=130,
+                                        text_size=tokens.FONT_BODY_SM,
+                                        tooltip=(
+                                            "Bearer: Authorization: Bearer ... (MCP norm). "
+                                            "Token: Authorization: Token ... "
+                                            "(Django-style backends)."
+                                        ),
+                                        options=[
+                                            ft.DropdownOption(key="bearer", text="Bearer"),
+                                            ft.DropdownOption(key="token", text="Token"),
+                                        ],
+                                        on_select=lambda e: set_m_auth_scheme(
+                                            str(e.control.value or "bearer")
+                                        ),
+                                    ),
+                                ],
                             ),
                         ),
                         _pad(

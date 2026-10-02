@@ -763,6 +763,39 @@ class AppController:
             )
             return
         state.busy = True
+        # Stuck-turn watchdog: if neither on_done/on_error/on_settled fires
+        # within N seconds (a hung tool, a wedged portal, a lost callback),
+        # the UI used to sit on a spinner forever with nothing in the log.
+        # The watchdog surfaces an error row and clears busy instead.
+        watchdog_gen = self._turn_gen = getattr(self, "_turn_gen", 0) + 1
+        self._turn_started_at = time.monotonic()
+
+        def _watchdog() -> None:
+            try:
+                time.sleep(180)
+            except Exception:
+                return
+            if watchdog_gen != self._turn_gen or not state.busy:
+                return
+            LOG.error("turn watchdog fired after 180s with no settlement; freeing busy")
+
+            def _apply() -> None:
+                state.busy = False
+                state.messages.append(
+                    {
+                        "role": "error",
+                        "content": (
+                            "The request took too long with no reply (3 minutes). "
+                            "The turn was stopped. Try again, or disable slow "
+                            "MCP servers in Settings."
+                        ),
+                        "kind": "timeout",
+                    }
+                )
+
+            self._in_flet_ctx(_apply)()
+
+        threading.Thread(target=_watchdog, name="turn-watchdog", daemon=True).start()
         self._stop_requested = False
         # ALL heavy work happens OFF the Flet event thread: constructing the
         # kani engine can trigger a one-time tiktoken BPE download
@@ -990,6 +1023,8 @@ class AppController:
     def _on_turn_settled(self) -> None:
         """Last-resort busy reset: fires even when on_done/on_error explode,
         so a callback failure can never wedge the UI in 'busy' forever."""
+        # Retire the watchdog: a settled turn must not be "freed" later.
+        self._turn_gen = getattr(self, "_turn_gen", 0) + 1
         try:
             state.busy = False
         except Exception as exc:

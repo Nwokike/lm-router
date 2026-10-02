@@ -71,6 +71,11 @@ class MCPServerConfig(BaseModel):
     args: list[str] = []
     url: AnyUrl | None = None
     headers: dict[str, str] = {}
+    # How the API key field is sent: "bearer" (Authorization: Bearer ...,
+    # the MCP norm) or "token" (Authorization: Token ..., used by Django
+    # backends like Igbo Archives). Wrong scheme reads as no credentials —
+    # a Token server answers Bearer with 401/405, not "wrong scheme".
+    auth_scheme: Literal["bearer", "token"] = "bearer"
     # The full SDK surface, not a subset: stdio servers may need extra
     # environment variables (API keys) and a working directory; remote
     # servers may tune the HTTP and SSE-read timeouts. The form decides

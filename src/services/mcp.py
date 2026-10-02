@@ -269,6 +269,11 @@ def classify_exception(exc: Exception) -> MCPError:
     lowered = text.lower()
     if "unauthorized" in lowered or "401" in text or "403" in text:
         return MCPError("auth", "Authentication failed. Check the headers or key.")
+    if "405" in text or "method not allowed" in lowered:
+        return MCPError(
+            "protocol",
+            "Server refused the transport (405). Try the other transport, or check the URL path.",
+        )
     if (
         "protocol" in lowered
         or "-32601" in text
@@ -531,6 +536,44 @@ class MCPHub:
                 # just the exception (the kinds come from classify_exception,
                 # which unwraps TaskGroup wrappers to the real cause).
                 error = classify_exception(exc)
+                # Adaptive fallback: some servers (Django-style backends)
+                # reject the streamable POST handshake (405) but serve the
+                # older SSE transport on the same URL. Retry once as SSE
+                # before reporting the server dead — same headers, same
+                # timeout, same task.
+                if server.transport == "streamable_http" and (
+                    "405" in str(exc) or "method not allowed" in str(exc).lower()
+                ):
+                    LOG.info("mcp %s: streamable refused (405); retrying as SSE", server.name)
+                    await _drain_pending_clients()
+                    try:
+                        fallback = build_server_params(
+                            server.model_copy(update={"transport": "sse"}),
+                            is_mobile=self.is_mobile,
+                        )
+                        fallback_ctx = tools_from_mcp_servers(
+                            [fallback],
+                            blocked_tools=blocked or None,
+                            component_name_hook=lambda name, _info, label=server.name: (
+                                f"{label}.{name}"
+                            ),
+                        )
+                        async with asyncio.timeout(CONNECT_TIMEOUT):
+                            tools = await fallback_ctx.__aenter__()
+                    except Exception as fallback_exc:
+                        await _drain_pending_clients()
+                        LOG.warning(
+                            "mcp %s SSE fallback failed: %s",
+                            server.name,
+                            str(fallback_exc)[:140],
+                        )
+                        failed.append(f"{server.name}: {error.kind} ({str(exc)[:100]})")
+                        continue
+                    LOG.info("mcp %s connected via SSE fallback", server.name)
+                    contexts.append(fallback_ctx)
+                    all_tools.extend(tools)
+                    all_names.extend(str(getattr(t, "name", "?")) for t in tools)
+                    continue
                 detail = await _stdio_diagnose(server, error)
                 LOG.warning("mcp %s failed (%s): %s", server.name, error.kind, detail)
                 failed.append(f"{server.name}: {detail[:140]}")

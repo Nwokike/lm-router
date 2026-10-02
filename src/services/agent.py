@@ -580,6 +580,12 @@ class AgentService:
         async def _run() -> None:
             done_fired = False
             last_message: Any = None
+            # Per-tool ceiling: one hung MCP/stdio tool used to wedge the
+            # whole turn with no error, no log, and busy stuck True — the
+            # UI just sat on a spinner. kani has no per-call timeout, so
+            # bound the FUNCTION-result wait here; the model turn itself is
+            # bounded by the gateway's own read timeout.
+            tool_timeout = 60.0
             try:
                 async for manager in kani.full_round_stream(
                     prompt,
@@ -592,7 +598,23 @@ class AgentService:
                         async for chunk in manager:
                             if chunk:
                                 _safe_callback("on_delta", lambda: on_delta(chunk))
-                    message = await manager.message()
+                    try:
+                        async with asyncio.timeout(tool_timeout):
+                            message = await manager.message()
+                    except TimeoutError:
+                        tool_name = str(getattr(manager, "name", "tool") or "tool")
+                        LOG.warning("tool %s timed out after %ss", tool_name, tool_timeout)
+                        _safe_callback(
+                            "on_error",
+                            lambda: on_error(
+                                "tool_timeout",
+                                f"Tool '{tool_name}' timed out after {tool_timeout:.0f}s. "
+                                "The server may be slow or stuck. Try again, or "
+                                "disable it in Settings, MCP.",
+                            ),
+                        )
+                        done_fired = True
+                        return
                     last_message = message
                     if is_function:
                         if on_tool is not None:
