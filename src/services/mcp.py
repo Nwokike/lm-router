@@ -542,6 +542,37 @@ class MCPHub:
                 failed.append(f"{server.name}: {detail[:140]}")
                 continue
             except Exception as exc:
+                # "Session terminated" (32600): load-balanced edges (Exa is
+                # behind Cloudflare) hand a later POST to a backend that
+                # never saw the initialize, so the server kills the session.
+                # A plain retry usually lands warm — retry once before
+                # reporting the server dead.
+                if "session terminated" in str(exc).lower():
+                    LOG.info("mcp %s: session terminated; retrying once", server.name)
+                    await _drain_pending_clients()
+                    try:
+                        retry_ctx = tools_from_mcp_servers(
+                            [params],
+                            blocked_tools=blocked or None,
+                            component_name_hook=lambda name, _info, label=server.name: (
+                                f"{label}.{name}"
+                            ),
+                        )
+                        async with asyncio.timeout(CONNECT_TIMEOUT):
+                            tools = await retry_ctx.__aenter__()
+                    except Exception as retry_exc:
+                        await _drain_pending_clients()
+                        LOG.warning("mcp %s retry failed: %s", server.name, str(retry_exc)[:140])
+                        failed.append(
+                            f"{server.name}: {classify_exception(retry_exc).kind} "
+                            f"({str(retry_exc)[:100]})"
+                        )
+                        continue
+                    LOG.info("mcp %s connected on session retry", server.name)
+                    contexts.append(retry_ctx)
+                    all_tools.extend(tools)
+                    all_names.extend(str(getattr(t, "name", "?")) for t in tools)
+                    continue
                 # Classify, don't dump: the status snack is the user's only
                 # clue, so it must name the FIX (URL, headers, protocol), not
                 # just the exception (the kinds come from classify_exception,

@@ -307,13 +307,17 @@ class AppSettings(BaseSettings):
             _LOAD_WARNINGS.append(
                 "Stored settings were invalid. Started with defaults.",
             )
-            return cls()
+            return cls.from_stored({})
 
     @classmethod
     def load(cls) -> AppSettings:
         path = storage.settings_path()
         if not path.exists():
-            return cls()
+            # from_stored({}), NOT cls(): every construction path must run
+            # the builtin seeding. The bare-cls early returns booted fresh
+            # installs with zero servers — no Exa, no error, nothing in the
+            # log (owner run 2026-10-02: second launch had no MCP at all).
+            return cls.from_stored({})
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
@@ -326,7 +330,7 @@ class AppSettings(BaseSettings):
             )
             with contextlib.suppress(OSError):
                 path.replace(path.with_suffix(".json.bak"))
-            return cls()
+            return cls.from_stored({})
         if not isinstance(data, dict):
             LOG.warning("settings file is valid JSON but not an object, moving aside")
             _LOAD_WARNINGS.append(
@@ -335,7 +339,7 @@ class AppSettings(BaseSettings):
             )
             with contextlib.suppress(OSError):
                 path.replace(path.with_suffix(".json.bak"))
-            return cls()
+            return cls.from_stored({})
         return cls.from_stored(data)
 
     def save(self) -> None:

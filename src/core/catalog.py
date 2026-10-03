@@ -100,13 +100,23 @@ def is_chat_eligible(model: dict[str, Any]) -> bool:
 
 
 def chat_models(catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Chat-eligible rows, `auto` first, then the rest alphabetically."""
+    """Chat-eligible rows, `auto` first, then by rate tier (High→Minimal),
+    latency, id. The owner's ask: the picker must not read alphabetical —
+    the best-limit models lead the list."""
     eligible = [m for m in catalog or [] if is_chat_eligible(m)]
     auto = [m for m in eligible if is_auto(m)]
-    rest = sorted(
-        (m for m in eligible if not is_auto(m)),
-        key=lambda m: str(m.get("id") or "").lower(),
-    )
+    _tier_rank = {"high": 0, "medium": 1, "low": 2, "minimal": 3}
+
+    def _sort_key(m: dict[str, Any]) -> tuple[int, float, str]:
+        hint = m.get("rate_hint")
+        tier = str(hint.get("tier") or "").strip().lower() if isinstance(hint, dict) else ""
+        return (
+            _tier_rank.get(tier, 4),
+            _as_float(m.get("latency_ms"), 10**6),
+            str(m.get("id") or "").lower(),
+        )
+
+    rest = sorted((m for m in eligible if not is_auto(m)), key=_sort_key)
     return auto + rest
 
 
