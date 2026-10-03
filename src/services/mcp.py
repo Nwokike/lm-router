@@ -167,17 +167,11 @@ def build_server_params(server: MCPServerConfig, is_mobile: bool = False) -> obj
     if not url:
         raise MCPError("config", "remote server needs a url")
     headers = dict(server.headers) or None
-    # Trailing-slash redirect (Django 301): the SDK follows redirects only
-    # within the endpoint's origin AND keeps the method only for 307/308 —
-    # a 301 POST-redirect becomes an unfollowed error naming the slash URL.
-    # Normalize API-ish paths to the slash form up front so the handshake
-    # never depends on the server's redirect behavior.
-    if server.transport == "streamable_http" and "://" in url:
-        _head, _, tail = url.partition("://")
-        if "." in tail.split("/", 1)[0] and not tail.endswith("/"):
-            last = tail.rsplit("/", 1)[-1]
-            if "." not in last:
-                url = url + "/"
+    # Do NOT normalize trailing slashes: some servers (Django) 301-redirect
+    # slashless to slash form, while others (Exa, Parallel on Cloudflare)
+    # serve ONLY the exact registered path and 404 the slash variant. The
+    # slash-URL retry in the 405/redirect fallback chain covers the Django
+    # case per-failure instead of breaking the exact-path case up front.
     if server.transport == "sse":
         # SSE param timeouts are plain seconds.
         kwargs: dict = {"url": url, "headers": headers}
@@ -186,7 +180,14 @@ def build_server_params(server: MCPServerConfig, is_mobile: bool = False) -> obj
         if server.sse_read_timeout is not None:
             kwargs["sse_read_timeout"] = float(server.sse_read_timeout)
         return SseServerParameters(**kwargs)
-    # Streamable-HTTP param timeouts are timedeltas.
+    # Streamable-HTTP param timeouts are timedeltas. Omitted (None) means the
+    # SDK default (30s ops / 300s SSE read): passing an EXPLICIT timeout
+    # changes the wire behavior — httpx.Timeout(30.0) collapses read/connect/
+    # write/pool ALL to 30s, while the default keeps read at 300s. On
+    # load-balanced edges (Cloudflare 32600 "Session terminated") the 30s
+    # read races session setup, while the default leaves setup room and our
+    # outer CONNECT_TIMEOUT still bounds the attempt. Only forward
+    # user-configured values.
     kwargs = {"url": url, "headers": headers}
     if server.timeout is not None:
         kwargs["timeout"] = timedelta(seconds=server.timeout)

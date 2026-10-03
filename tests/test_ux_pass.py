@@ -12,15 +12,15 @@ def test_builtin_exa_seeded_once() -> None:
     from core.settings import AppSettings
 
     first = AppSettings.from_stored({})
-    exa = [s for s in first.mcp_servers if getattr(s, "protected", False)]
-    assert len(exa) == 1, "builtin Exa must seed on empty store"
-    assert exa[0].enabled is True
+    builtin = [s for s in first.mcp_servers if getattr(s, "protected", False)]
+    assert {s.id for s in builtin} == {"builtin-exa", "builtin-parallel"}
+    assert all(s.enabled for s in builtin)
 
-    # Second load from the stored form: no duplicate.
+    # Second load from the stored form: no duplicates.
     stored = first.to_stored()
     second = AppSettings.from_stored(stored)
-    builtin = [s for s in second.mcp_servers if getattr(s, "protected", False)]
-    assert len(builtin) == 1
+    builtin2 = [s for s in second.mcp_servers if getattr(s, "protected", False)]
+    assert {s.id for s in builtin2} == {"builtin-exa", "builtin-parallel"}
 
 
 def test_manual_exa_counts_as_present() -> None:
@@ -39,8 +39,9 @@ def test_manual_exa_counts_as_present() -> None:
     }
     settings = AppSettings.from_stored(stored)
     builtin = [s for s in settings.mcp_servers if getattr(s, "protected", False)]
-    assert builtin == [], "user Exa must not gain a builtin twin"
-    assert len(settings.mcp_servers) == 1
+    # Manual Exa suppresses the builtin Exa twin, but Parallel still seeds.
+    assert [s.id for s in builtin] == ["builtin-parallel"]
+    assert len(settings.mcp_servers) == 2
 
 
 def test_protected_remove_refused(boot_page) -> None:
@@ -50,13 +51,11 @@ def test_protected_remove_refused(boot_page) -> None:
     controller.init()
     boot_page.drain()
 
-    builtin = next(
-        (s for s in controller.settings.mcp_servers if getattr(s, "protected", False)),
-        None,
-    )
-    assert builtin is not None, "seeded builtin missing in controller settings"
+    builtin = [s for s in controller.settings.mcp_servers if getattr(s, "protected", False)]
+    assert {s.id for s in builtin} == {"builtin-exa", "builtin-parallel"}
     before = len(controller.settings.mcp_servers)
-    controller._remove_mcp_server(builtin.id)
+    for s in builtin:
+        controller._remove_mcp_server(s.id)
     assert len(controller.settings.mcp_servers) == before
 
 

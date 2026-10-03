@@ -44,12 +44,12 @@ def _new_id() -> str:
 
 
 def _ensure_builtin_servers(servers: list) -> None:
-    """Seed the protected built-in entries (Exa search) when missing.
+    """Seed the protected built-in entries (Exa + Parallel search) when missing.
 
-    Idempotent: matches by stable id OR normalized URL, so a user's manual
-    Exa counts as present (never duplicated) and legacy stores gain the
-    entry exactly once. Runs inside from_stored, so every load path —
-    boot, tests, controller — converges without a separate migration.
+    Idempotent per preset: matches by stable id OR normalized URL, so a
+    user's manual entry counts as present (never duplicated) and legacy
+    stores gain each entry exactly once. Runs inside from_stored, so every
+    load path — boot, tests, controller — converges without migration.
     """
     # Local import: services.mcp_catalog is a leaf, settings must stay
     # import-light at module top (core is imported by services).
@@ -60,8 +60,9 @@ def _ensure_builtin_servers(servers: list) -> None:
     for preset in _catalog.PRESETS:
         if not preset.get("builtin"):
             continue
+        want_id = _catalog._builtin_id_for(preset)
         want_url = str(preset["url"]).rstrip("/").lower()
-        if _catalog.BUILTIN_EXA_ID in have_ids or want_url in have_urls:
+        if want_id in have_ids or want_url in have_urls:
             continue
         try:
             servers.append(MCPServerConfig(**_catalog.preset_payload(preset)))

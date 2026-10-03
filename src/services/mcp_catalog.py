@@ -10,10 +10,12 @@ v1 is deliberately header-auth only: servers behind OAuth (Notion, Figma,
 Linear, Sentry...) need a real sign-in flow and stay out until we build one.
 """
 
-# Stable id of the protected built-in entry. Seeded on boot when missing;
+# Stable ids of the protected built-in entries. Seeded on boot when missing;
 # never duplicated, never re-added, never deletable (only disablable).
 BUILTIN_EXA_ID = "builtin-exa"
 BUILTIN_EXA_URL = "https://mcp.exa.ai/mcp"
+BUILTIN_PARALLEL_ID = "builtin-parallel"
+BUILTIN_PARALLEL_URL = "https://search.parallel.ai/mcp"
 
 PRESETS: tuple[dict, ...] = (
     # ---- keyless: one tap and it connects ----
@@ -26,6 +28,17 @@ PRESETS: tuple[dict, ...] = (
         "description": (
             "Searches the web and reads pages for you, so answers come with "
             "real sources instead of guesses."
+        ),
+    },
+    {
+        "id": "parallel",
+        "name": "Parallel",
+        "url": BUILTIN_PARALLEL_URL,
+        "auth": None,
+        "builtin": True,
+        "description": (
+            "Backup web search and page fetch, so answers still have sources "
+            "when the primary provider is unavailable."
         ),
     },
     {
@@ -169,6 +182,13 @@ def preset_payload(preset: dict, api_key: str = "") -> dict:
         "headers": headers,
     }
     if preset.get("builtin"):
-        payload["id"] = BUILTIN_EXA_ID
+        payload["id"] = _builtin_id_for(preset)
         payload["protected"] = True
     return payload
+
+
+def _builtin_id_for(preset: dict) -> str:
+    """Stable id per builtin preset (never the catalog slug, which can move)."""
+    return {"exa": BUILTIN_EXA_ID, "parallel": BUILTIN_PARALLEL_ID}.get(
+        str(preset.get("id") or ""), f"builtin-{preset.get('id')}"
+    )

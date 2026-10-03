@@ -13,7 +13,10 @@ def test_seed_survives_missing_file(tmp_path, monkeypatch) -> None:
     assert not storage.settings_path().exists(), "precondition: fresh store"
     settings = AppSettings.load()
     builtin = [s for s in settings.mcp_servers if getattr(s, "protected", False)]
-    assert len(builtin) == 1, f"builtin not seeded on missing file: {settings.mcp_servers}"
+    assert {s.id for s in builtin} == {
+        "builtin-exa",
+        "builtin-parallel",
+    }, f"builtins not seeded on missing file: {settings.mcp_servers}"
 
 
 def test_seed_survives_corrupt_file(tmp_path, monkeypatch) -> None:
@@ -24,7 +27,10 @@ def test_seed_survives_corrupt_file(tmp_path, monkeypatch) -> None:
     storage.settings_path().write_text("{corrupt", encoding="utf-8")
     settings = AppSettings.load()
     builtin = [s for s in settings.mcp_servers if getattr(s, "protected", False)]
-    assert len(builtin) == 1, "builtin not seeded on corrupt file"
+    assert {s.id for s in builtin} == {
+        "builtin-exa",
+        "builtin-parallel",
+    }, "builtins not seeded on corrupt file"
 
 
 def test_seed_survives_non_dict_file(tmp_path, monkeypatch) -> None:
@@ -35,7 +41,10 @@ def test_seed_survives_non_dict_file(tmp_path, monkeypatch) -> None:
     storage.settings_path().write_text("[1,2,3]", encoding="utf-8")
     settings = AppSettings.load()
     builtin = [s for s in settings.mcp_servers if getattr(s, "protected", False)]
-    assert len(builtin) == 1, "builtin not seeded on non-dict file"
+    assert {s.id for s in builtin} == {
+        "builtin-exa",
+        "builtin-parallel",
+    }, "builtins not seeded on non-dict file"
 
 
 def test_session_terminated_retries_once(monkeypatch) -> None:

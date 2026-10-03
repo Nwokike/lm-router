@@ -303,9 +303,10 @@ def test_mcp_owner_spawned_without_configured_servers(boot_page) -> None:
     controller.init()
     boot_page.drain()
 
-    # Fresh config seeds exactly the protected builtin (Exa): the owner
-    # still starts with zero *user* servers, and the task must spawn anyway.
-    assert [s.name for s in controller.services.settings.mcp_servers] == ["Exa"]
+    # Fresh config seeds exactly the protected builtins (Exa + Parallel):
+    # the owner still starts with zero *user* servers, and the task must
+    # spawn anyway.
+    assert [s.name for s in controller.services.settings.mcp_servers] == ["Exa", "Parallel"]
     assert controller._mcp_future is not None, "owner task must spawn unconditionally"
 
     # Idempotent: a live owner is never double-spawned.
@@ -636,8 +637,8 @@ def test_mcp_mutators_bump_the_settings_snapshot(boot_page) -> None:
     before = state.settings_version
     controller.methods.remove_mcp_server(server_id)
     assert state.settings_version == before + 1, "remove must bump the snapshot"
-    # The protected builtin survives: only the user-added probe is gone.
-    assert [s.name for s in controller.settings.mcp_servers] == ["Exa"]
+    # The protected builtins survive: only the user-added probe is gone.
+    assert [s.name for s in controller.settings.mcp_servers] == ["Exa", "Parallel"]
 
 
 def test_mcp_owner_ui_loop_spawn_receives_a_coroutine(boot_page) -> None:
@@ -726,11 +727,11 @@ def test_add_mcp_server_reports_rejection_instead_of_implied_success(boot_page) 
     )
 
     # Cleanup: never leave test servers in the owner's settings. The
-    # protected builtin is not ours to remove — only the "good" probe.
+    # protected builtins are not ours to remove — only the "good" probe.
     for server in list(controller.settings.mcp_servers):
         if server.name == "good":
             controller.methods.remove_mcp_server(server.id)
-    assert [s.name for s in controller.settings.mcp_servers] == ["Exa"]
+    assert [s.name for s in controller.settings.mcp_servers] == ["Exa", "Parallel"]
 
 
 def test_search_enabled_save_syncs_the_chat_pill_observable(boot_page) -> None:
