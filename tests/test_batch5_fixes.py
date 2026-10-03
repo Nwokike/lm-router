@@ -56,54 +56,6 @@ def test_engine_tmp_pid_suffixed(tmp_path, monkeypatch) -> None:
     assert tmp.suffix == ".py"
 
 
-def test_search_primary_failures_raise_into_fallbacks(monkeypatch) -> None:
-    import asyncio
-
-    import httpx
-
-    from services import search as search_mod
-    from services.http import HttpService
-
-    async def _boom(*args, **kwargs):
-        raise RuntimeError("provider exploded")
-
-    monkeypatch.setattr(search_mod, "streamable_http_client", _boom)
-
-    async def _wiki(http, query, top_k):
-        return ""  # empty: must fall THROUGH to the next source
-
-    async def _ddg(http, query, top_k):
-        return "DuckDuckGo results:\n- fallback hit"
-
-    monkeypatch.setattr(search_mod, "FALLBACKS", (_wiki, _ddg))
-    transport = httpx.MockTransport(lambda r: httpx.Response(200, json={}))
-    http = HttpService(client=httpx.AsyncClient(transport=transport))
-    out = asyncio.run(search_mod.run_search_with_fallback(http, "flet 1.0.3"))
-    assert "fallback hit" in out
-
-
-def test_search_clamp_and_empty_query() -> None:
-    import asyncio
-
-    from services.http import HttpService
-    from services.search import _clamp_top_k, run_search
-
-    assert _clamp_top_k(99) == 10
-    assert _clamp_top_k(-3) == 1
-    assert _clamp_top_k("garbage") == 5
-    http = HttpService()
-    with pytest.raises(ValueError, match="empty"):
-        asyncio.run(run_search(http, "   "))
-
-
-def test_search_tool_picks_vendor_prefixed_names() -> None:
-    from services.search import _pick_search_tool
-
-    assert _pick_search_tool(["exa_web_search", "other"]) == "exa_web_search"
-    assert _pick_search_tool(["tavily_search"]) == "tavily_search"
-    assert _pick_search_tool(["unrelated"]) is None
-
-
 def test_conversation_files_land_owner_only(
     tmp_path,
     monkeypatch,

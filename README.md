@@ -123,10 +123,10 @@
 
 | Layer | Technology | Purpose |
 | :--- | :--- | :--- |
-| **Frontend** | Flet 1.0.1 on Python 3.14 | Cross-platform UI — components, contexts, observable state, Markdown, services |
+| **Frontend** | Flet 1.0.3 on Python 3.14 | Cross-platform UI — components, contexts, observable state, Markdown, services |
 | **Chat Core** | kani (OpenAI engine) on an anyio portal | Streaming turns, tool calling, reasoning capture, token budgeting |
 | **Gateway** | router.kiri.ng fetched at startup | Local OpenAI-compatible endpoint with model discovery, health and rate hints |
-| **Tools** | Official mcp SDK + keyless HTTP search | Remote/local MCP servers and built-in web search with fallback |
+| **Tools** | Official mcp SDK | Remote/local MCP servers; built-in Exa + Parallel search (MCP-only, vendor failover) |
 | **Sharing** | Stdlib auth proxy + public tunnel | Optional key-protected exposure of the local gateway to another OpenAI client |
 
 ### Visual Flow

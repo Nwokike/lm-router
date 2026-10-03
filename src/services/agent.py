@@ -707,11 +707,29 @@ class AgentService:
                     done_fired = True
                     _safe_callback("on_done", lambda: on_done(message, _usage_from(message)))
                 if not done_fired and last_message is not None:
-                    # model stopped right after requesting tools; surface what we have
-                    done_fired = True
-                    _safe_callback(
-                        "on_done", lambda: on_done(last_message, _usage_from(last_message))
-                    )
+                    if getattr(last_message, "tool_calls", None):
+                        # Round cap: kani returned the model's LAST message
+                        # (tool_calls, no text) after max_function_rounds.
+                        # The old path called on_done with empty content and
+                        # the UI reported a misleading "empty reply" — say
+                        # what actually happened instead.
+                        done_fired = True
+                        rounds = self.settings.tool_max_rounds
+                        _safe_callback(
+                            "on_error",
+                            lambda: on_error(
+                                "tool_rounds",
+                                f"Stopped after {rounds} tool rounds while the "
+                                "model was still calling tools. Raise Tool "
+                                "rounds in Settings, or ask again.",
+                            ),
+                        )
+                    else:
+                        # model stopped right after requesting tools; surface what we have
+                        done_fired = True
+                        _safe_callback(
+                            "on_done", lambda: on_done(last_message, _usage_from(last_message))
+                        )
             except asyncio.CancelledError:
                 # Swallow: re-raising re-enters the anyio task group with a
                 # cancellation — the exact collapse mode the poisoned-portal

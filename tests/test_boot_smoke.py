@@ -735,20 +735,24 @@ def test_add_mcp_server_reports_rejection_instead_of_implied_success(boot_page) 
 
 
 def test_search_enabled_save_syncs_the_chat_pill_observable(boot_page) -> None:
-    """The chat pill reads state.search_enabled, not the settings model —
-    the Settings switch used to persist without ever moving the pill."""
+    """search_enabled was removed with the hand-rolled search tool: old
+    stores carry the key, save_settings must not resurrect it as live state."""
+    from core.settings import AppSettings
     from main import AppController
 
     controller = AppController(boot_page)
     controller.init()
     boot_page.drain()
 
-    state.search_enabled = False
+    # Unknown key: rejected by the allowlist, no exception, no attribute.
     controller.methods.save_settings({"search_enabled": True})
-    assert state.search_enabled is True, "observable must follow the saved setting"
+    assert "search_enabled" not in AppSettings.model_fields
+    assert not hasattr(controller.settings, "search_enabled")
 
-    controller.methods.save_settings({"search_enabled": False})
-    assert state.search_enabled is False
+    # Old stored file with the key still loads cleanly (extra="ignore").
+    loaded = AppSettings.from_stored({"search_enabled": False, "gateway_port": 8082})
+    assert loaded.gateway_port == 8082
+    assert "search_enabled" not in AppSettings.model_fields
 
 
 def test_boot_primes_the_model_and_keeps_the_connectivity_handle(boot_page) -> None:
@@ -1054,7 +1058,8 @@ def test_router_guide_and_tools_wire_into_the_agent(boot_page) -> None:
     assert "OpenAI-compatible gateway" in controller._system_prompt()
 
     # Tools registered (names are part of the generation tuple so kani rebuilds).
+    # Desktop boot (tests): shell + read join the router trio.
     tools, generation = controller._extra_tools()
     names = {getattr(tool, "name", "") for tool in tools}
-    assert {"gateway_status", "list_models", "test_model"} <= names, names
-    assert "router3" in str(generation), "tool set change must bump the generation"
+    assert {"gateway_status", "list_models", "test_model", "shell", "read"} <= names, names
+    assert "router4" in str(generation), "tool set change must bump the generation"

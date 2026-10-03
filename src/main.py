@@ -31,6 +31,7 @@ from services.clock import build_time_tool, with_clock
 from services.engine import EngineService
 from services.file_save import save_text_file
 from services.http import HttpService
+from services.local_tools import build_read_tool, build_shell_tool
 from services.mcp import MCPHub
 from services.reasoning import final_reasoning
 from services.router_guide import ROUTER_GUIDE
@@ -39,7 +40,6 @@ from services.router_tools import (
     build_probe_tool,
     build_status_tool,
 )
-from services.search import build_search_tool
 from services.share import ShareSession, generate_key
 from services.tokenizer import prewarm_tokenizers
 from services.tunnel import LocalTunnel
@@ -63,6 +63,9 @@ class AppController:
         self._url_launcher: object | None = None
         self._clipboard: ft.Clipboard | None = None
         self.ads: AdService | None = None
+        # Set in init() from the Flet platform probe; tests that call
+        # _extra_tools without init() stay desktop (shell + read on).
+        self._is_mobile: bool = False
         self._stop_requested = False
         self._ui_loop: asyncio.AbstractEventLoop | None = None
         # 2Hz log-render budget (Sherlock's flusher pattern): log records
@@ -106,7 +109,6 @@ class AppController:
         state.gateway_port = settings.gateway_port
         state.onboarding_done = settings.onboarding_done
         state.terms_accepted = settings.terms_accepted
-        state.search_enabled = settings.search_enabled
         # Remembered model before any catalog arrives: a running gateway
         # whose /models fetch failed used to fail every send with "No model
         # selected yet." even though last_model was known.
@@ -166,13 +168,15 @@ class AppController:
             is_mobile = False
         hub = MCPHub(settings, is_mobile=is_mobile, on_status=self._mcp_status)
         agent = AgentService(settings, extra_tools=self._extra_tools)
+        self._is_mobile = is_mobile
         self.services.settings = settings
         self.services.http = http
         self.services.engine = engine
         self.services.mcp = hub
         self.services.agent = agent
-        self._search_tool = build_search_tool(http)
         self._time_tool = build_time_tool()
+        self._shell_tool = build_shell_tool()
+        self._read_tool = build_read_tool()
         # Live-router chat tools (R5): status / catalog / single probe.
         # Read-only, local, zero-auth; bulk sweeps stay UI buttons on purpose.
         self._router_status_tool = build_status_tool(http)
@@ -1348,8 +1352,9 @@ class AppController:
             # Pair with the system-prompt clock line: the line handles routine
             # "what's today" questions, the tool covers exact readings.
             tools.append(self._time_tool)
-        if self.settings.search_enabled and self._search_tool is not None:
-            tools.append(self._search_tool)
+        # Search is MCP-only now (Exa + Parallel builtins): no hand-rolled
+        # web_search tool, no direct-HTTP fallbacks. The model picks a
+        # vendor tool when research is needed.
         tools.extend(self.services.mcp.tools)
         tools.extend(
             (
@@ -1358,10 +1363,11 @@ class AppController:
                 self._router_probe_tool,
             ),
         )
-        return tools, (
-            f"{self.services.mcp.generation}:{self.settings.search_enabled}"
-            f":{self.settings.tell_model_time}:router3"
-        )
+        if not self._is_mobile:
+            # Desktop-only: phones have no shell and no shared filesystem
+            # worth reading (same gate as stdio MCP).
+            tools.extend((self._shell_tool, self._read_tool))
+        return tools, (f"{self.services.mcp.generation}:{self.settings.tell_model_time}:router4")
 
     def _system_prompt(self) -> str:
         """The built-in router guide (when enabled), the stored prompt, plus
@@ -1583,7 +1589,6 @@ class AppController:
             "require_share_key",
             "share_key",
             "system_prompt",
-            "search_enabled",
             "interstitial_every",
             "update_check",
             "max_context_tokens",
@@ -1628,11 +1633,6 @@ class AppController:
             return
         self.settings.save()
         state.settings_version += 1
-        if "search_enabled" in updates:
-            # The chat pill reads the observable, not the settings model —
-            # without this the Settings switch and the pill disagreed until
-            # restart (the chat-side toggle writes both).
-            state.search_enabled = self.settings.search_enabled
         if self._share is not None and {"require_share_key", "share_key"} & set(updates):
             # The proxy captured its key at bind time; rebind live (owner
             # decision: touching the toggle/key mid-share restarts sharing

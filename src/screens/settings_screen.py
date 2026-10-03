@@ -432,7 +432,6 @@ def SettingsScreen():
         set_port_text(str(fresh.gateway_port))
         set_autostart(fresh.gateway_autostart)
         set_keep_running(fresh.keep_running_when_closed)
-        set_search_on(fresh.search_enabled)
         set_gen_temperature(f"{fresh.temperature:g}")
         set_gen_top_p(f"{fresh.top_p:g}")
         set_gen_max_tokens(str(fresh.max_reply_tokens))
@@ -465,7 +464,6 @@ def SettingsScreen():
     port_text, set_port_text = ft.use_state(str(settings.gateway_port))
     autostart, set_autostart = ft.use_state(settings.gateway_autostart)
     keep_running, set_keep_running = ft.use_state(settings.keep_running_when_closed)
-    search_on, set_search_on = ft.use_state(settings.search_enabled)
     provider_open, set_provider_open = ft.use_state(False)
     mcp_open, set_mcp_open = ft.use_state(False)
     mcp_expanded, set_mcp_expanded = ft.use_state("")
@@ -1728,26 +1726,6 @@ def SettingsScreen():
         )
     mcp_card = _section("MCP servers", mcp_rows)
 
-    search_card = _section(
-        "Web search",
-        [
-            setting_row(
-                icon=ft.Icons.TRAVEL_EXPLORE_ROUNDED,
-                title="Built-in web search",
-                subtitle="Keyless hosted search. Applies from the next message.",
-                trailing=ft.Switch(
-                    value=search_on,
-                    active_color=ft.Colors.PRIMARY,
-                    on_change=lambda e: (
-                        set_search_on(bool(e.control.value)),
-                        methods.save_settings({"search_enabled": bool(e.control.value)}),
-                    ),
-                ),
-                stacked=narrow,
-            ),
-        ],
-    )
-
     # About: the centred identity block, back as it was, minus the open-source
     # licence line, which the owner asked to drop. Buttons are centred too, so
     # the card reads as one block instead of a left-aligned outlier.
@@ -1898,7 +1876,6 @@ def SettingsScreen():
             *providers_card,
             *mcp_card,
             build_banner_ad(),
-            *search_card,
             *about_card,
             # No banner at the floor: the owner banned them there. The spacer
             # stays last.

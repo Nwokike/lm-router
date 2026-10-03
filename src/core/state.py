@@ -43,7 +43,6 @@ class AppState:
     # catalog + chat
     model: str = ""
     busy: bool = False
-    search_enabled: bool = True
     context_used_tokens: int = 0
     sent_count: int = 0
     update_info: dict | None = None

@@ -184,7 +184,8 @@ class AppSettings(BaseSettings):
     share_enabled: bool = False
     require_share_key: bool = False
     share_key: str = ""
-    search_enabled: bool = True
+    # search_enabled is gone: search is MCP-only (Exa + Parallel builtins).
+    # Old stored files carrying it are ignored (extra="ignore").
     interstitial_every: int = Field(default=constants.INTERSTITIAL_EVERY, ge=1)
     providers: list[ProviderConfig] = []
     active_provider_id: str = ""
@@ -204,8 +205,9 @@ class AppSettings(BaseSettings):
     reasoning_effort: Literal["auto", "minimal", "low", "medium", "high"] = "auto"
     json_mode: bool = False
     # How many tool round-trips a single turn may take. Weak free models loop
-    # forever without a cap; 3 covers search + a follow-up.
-    tool_max_rounds: int = Field(default=3, ge=1, le=10)
+    # forever without a cap; MCP research chains (search + fetch + fetch)
+    # need room, so 6 covers a full investigation without a premature stop.
+    tool_max_rounds: int = Field(default=6, ge=1, le=10)
     # kani's self-correction budget when a tool call is malformed.
     tool_retry_attempts: int = Field(default=1, ge=0, le=5)
     # Tell the model what time it is. Without this it guesses at "today".
@@ -300,6 +302,15 @@ class AppSettings(BaseSettings):
 
         _ensure_builtin_servers(stored_servers)
         data["mcp_servers"] = stored_servers
+
+        # One-time migration (v1 -> v2): the old default of 3 tool rounds
+        # cut MCP research chains off mid-investigation (owner log: round
+        # warning + "empty reply" with a fetch pending). Stored 3 == old
+        # default, never an explicit user choice; bump alongside it.
+        if int(data.get("settings_version") or 1) == 1 and data.get("tool_max_rounds") == 3:
+            data["tool_max_rounds"] = 6
+            data["settings_version"] = 2
+            _LOAD_WARNINGS.append("Tool rounds raised from 3 to 6 (research chains).")
 
         try:
             return cls(**data)
