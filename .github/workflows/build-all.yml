@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       build_version:
-        description: "Build version"
-        required: true
-        default: "1.0.0"
+        description: "Build version (blank = read pyproject.toml)"
+        required: false
+        default: ""
       build_number:
         description: "Build number"
         required: true
@@ -22,13 +22,39 @@ env:
   PYTHONUTF8: "1"
   FLET_CLI_NO_RICH_OUTPUT: "1"
   UV_PYTHON: "3.14"
-  BUILD_VERSION: ${{ inputs.build_version || '1.0.0' }}
   BUILD_NUMBER: ${{ inputs.build_number || '1' }}
 
 jobs:
+  # ─── Resolve the build version ONCE (tag > dispatch input > pyproject) ──
+  # Hardcoding the fallback broke the v1.1.0 tag build (BUILD_VERSION 1.0.0
+  # != pyproject 1.1.0) and would fail every PR after the first bump. Every
+  # other job reads this output so the artifact version, the app's
+  # APP_VERSION and the tag can never disagree.
+  resolve-version:
+    runs-on: ubuntu-latest
+    outputs:
+      BUILD_VERSION: ${{ steps.resolve.outputs.BUILD_VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve BUILD_VERSION
+        id: resolve
+        run: |
+          V="${{ inputs.build_version }}"
+          if [ -z "$V" ] && [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            V="${GITHUB_REF_NAME#v}"
+          fi
+          if [ -z "$V" ]; then
+            V=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          fi
+          echo "BUILD_VERSION=$V" >> "$GITHUB_OUTPUT"
+          echo "Resolved BUILD_VERSION=$V"
+
   # ─── Q. Quality gate: lint + tests (blocks every build) ───────────────
   quality:
+    needs: [resolve-version]
     runs-on: ubuntu-latest
+    env:
+      BUILD_VERSION: ${{ needs.resolve-version.outputs.BUILD_VERSION }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -114,7 +140,7 @@ jobs:
 
   # ─── 0. Create Release Tag & Placeholder ───────────────
   prepare-release:
-    needs: [quality]
+    needs: [quality, resolve-version]
     runs-on: ubuntu-latest
     outputs:
       TAG_NAME: ${{ steps.tag_info.outputs.TAG_NAME }}
@@ -155,8 +181,10 @@ jobs:
 
   # ─── Android APK (split per ABI) ───────────────────────
   build-apk-split:
-    needs: [prepare-release]
+    needs: [prepare-release, resolve-version]
     runs-on: ubuntu-latest
+    env:
+      BUILD_VERSION: ${{ needs.resolve-version.outputs.BUILD_VERSION }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -194,8 +222,10 @@ jobs:
 
   # ─── Android AAB (Play Store) ───────────────────────────
   build-aab:
-    needs: [prepare-release]
+    needs: [prepare-release, resolve-version]
     runs-on: ubuntu-latest
+    env:
+      BUILD_VERSION: ${{ needs.resolve-version.outputs.BUILD_VERSION }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -228,8 +258,10 @@ jobs:
 
   # ─── Windows (Automated .exe Setup Installer) ──────────────
   build-windows:
-    needs: [prepare-release]
+    needs: [prepare-release, resolve-version]
     runs-on: windows-latest
+    env:
+      BUILD_VERSION: ${{ needs.resolve-version.outputs.BUILD_VERSION }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -296,8 +328,10 @@ jobs:
 
   # ─── Linux (.deb, .rpm & Universal .tar.gz) ────────────────
   build-linux:
-    needs: [prepare-release]
+    needs: [prepare-release, resolve-version]
     runs-on: ubuntu-latest
+    env:
+      BUILD_VERSION: ${{ needs.resolve-version.outputs.BUILD_VERSION }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
