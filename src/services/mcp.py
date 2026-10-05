@@ -397,7 +397,10 @@ class MCPHub:
                 self._reconnect.clear()
                 try:
                     while not self._stop.is_set() and not self._reconnect.is_set():
-                        # thread-safe wait; never blocks the owner loop
+                        # thread-safe wait; never blocks the owner loop. A plain
+                        # asyncio.sleep checkpoint was tried (M6a) — the owner's
+                        # foreign-cancel absorption below depends on parking
+                        # OUTSIDE anyio's checkpoint machinery.
                         await asyncio.to_thread(self._reconnect.wait, 0.5)
                 except asyncio.CancelledError as exc:
                     # A foreign cancel tagged "cancel scope" is an abandoned

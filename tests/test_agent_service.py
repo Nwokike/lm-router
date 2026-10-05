@@ -225,8 +225,9 @@ def test_offline_gateway_short_circuits(monkeypatch) -> None:
 
 def test_busy_and_stop_are_safe(monkeypatch) -> None:
     agent = _boot(monkeypatch, lambda request: httpx.Response(200, json={}))
+    sess = agent._session(agent.active_conv)
     try:
-        agent._current = object()  # simulate an in-flight turn
+        sess.current = object()  # simulate an in-flight turn
         calls: list = []
         started = agent.start_turn(
             "hi",
@@ -243,13 +244,13 @@ def test_busy_and_stop_are_safe(monkeypatch) -> None:
             def cancel(self) -> None:
                 cancelled["done"] = True
 
-        agent._current = _Fut()
+        sess.current = _Fut()
         agent.stop_turn()
         assert cancelled["done"] is True
         assert agent.busy is False
         agent.stop_turn()  # second stop is a no-op
     finally:
-        agent._current = None
+        sess.current = None
         agent.stop()
 
 

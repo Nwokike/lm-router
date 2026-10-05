@@ -18,18 +18,20 @@ Turn message protocol (chronological, so tool cards land in order):
 import asyncio
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 import openai
 from anyio.from_thread import BlockingPortalProvider
-from kani import Kani
+from kani import ChatMessage, Kani
 from kani.engines.openai import OpenAIEngine
 
 from core.catalog import api_type_for, rate_limit_advice
 from core.logging import LOG
 from core.settings import AppSettings
 from core.state import state
+from services.clock import strip_clock_line
 from services.guard_kani import GuardedKani
 from services.reasoning import (
     ReasoningEngine,
@@ -50,10 +52,40 @@ ErrorCB = Callable[[str, str], None]
 ToolCB = Callable[[str, str, bool], None]
 ExtraTools = Callable[[], tuple[list, object]]
 
-# Placeholder parked in AgentService._current while a turn is reserved but
+# Placeholder parked in a session's `current` while a turn is reserved but
 # its portal task is not yet created. Never cancelled, never awaited — the
 # dispatch sites below replace it with the real task handle.
 _TURN_RESERVED: Any = object()
+
+# Absolute ceiling on one model round's `manager.message()` wait. A hung TOOL
+# never reaches this (GuardedKani converts it to an error result at 30s); this
+# catches a wedged round itself. Aligned with the UI watchdog in main.py — the
+# old 60s value killed whole turns for legitimately slow tool batches.
+TURN_CEILING_S = 180.0
+
+
+@dataclass
+class _Session:
+    """One conversation's kani session.
+
+    kani's own model: sessions are independent objects. Each carries its own
+    kani (history), its own engine (HTTP pool + reasoning tap), and its own
+    turn handle — so a turn in flight always runs against ITS conversation
+    and opening/creating another conversation can never corrupt it. The
+    turn-shape key (model/system/base/tools/retry/ctx) lives on AgentService
+    because it is a global user selection, not per conversation.
+    """
+
+    kani: Kani | None = None
+    # Portal task handle, or _TURN_RESERVED while the turn is being set up.
+    current: Any = None
+    # Set by stop_turn when the stop lands while current is still the
+    # reservation (no task handle yet); the dispatcher cancels on arrival.
+    cancel_on_dispatch: bool = False
+    # Per-session engine clients (openai SDK + underlying httpx pool), closed
+    # on the portal before the engine is replaced or the session dropped.
+    client: Any = None
+    http: httpx.AsyncClient | None = None
 
 
 def _catalog_row(model_id: str) -> dict | None:
@@ -265,23 +297,26 @@ class AgentService:
         self._extra_tools = extra_tools
         self._provider: BlockingPortalProvider | None = None
         self._portal: Any = None
-        self._kani: Kani | None = None
+        # One kani session PER CONVERSATION (see _Session): a turn in flight
+        # always runs on ITS conversation's kani, so opening a new or another
+        # conversation never has to interrupt it — no "stop generation first".
+        self._sessions: dict[str, _Session] = {}
+        # The conversation new sends/loads target; the controller keeps this
+        # in step with state.active_conversation.
+        self.active_conv: str = ""
         self._model = ""
         self._system = ""
         self._base = ""
         self._tools_gen: object = None
-        self._current: Any = None
         self._tools_error: str | None = None
         # Build-time settings this kani was constructed WITH — both are read
         # only at construction, so they must join the reuse comparison below
         # or changing them silently does nothing for the session.
         self._retry: int | None = None
         self._ctx: int | None = None
-        # Live HTTP resources owned by the current engine: closed via the
-        # portal before the engine is replaced or the portal dies, so model
-        # switches never leak sockets/pools.
-        self._engine_client: Any = None
-        self._engine_http: httpx.AsyncClient | None = None
+        # Live HTTP resources are tracked PER SESSION now (_Session.client/.http)
+        # and closed via the portal before an engine is replaced or the portal
+        # dies, so model switches never leak sockets/pools.
         # Set by the controller to re-spawn long-lived portal tasks (the MCP
         # owner loop) after a portal restart — without it, a restart silently
         # kills MCP for the rest of the session.
@@ -299,14 +334,39 @@ class AgentService:
 
     @property
     def kani(self) -> Kani | None:
-        return self._kani
+        sess = self._sessions.get(self.active_conv)
+        return sess.kani if sess is not None else None
+
+    # Test/legacy alias: reads and writes land on the ACTIVE session's kani.
+    @property
+    def _kani(self) -> Kani | None:
+        return self.kani
+
+    @_kani.setter
+    def _kani(self, value: Kani | None) -> None:
+        self._session(self.active_conv).kani = value
+
+    def _session(self, conv_id: str) -> _Session:
+        sess = self._sessions.get(conv_id)
+        if sess is None:
+            sess = _Session()
+            self._sessions[conv_id] = sess
+        return sess
+
+    def session_kani(self, conv_id: str) -> Kani | None:
+        """A conversation's kani WITHOUT creating an empty session."""
+        sess = self._sessions.get(conv_id)
+        return sess.kani if sess is not None else None
 
     @property
-    def busy(self) -> bool:
-        # Read-only: no mutation here. Clearing a finished handle is the
-        # dispatcher's job (finally in _run / stop_turn); a getter that
-        # writes races with the lock-protected reserve path above.
-        curr = self._current
+    def session_ids(self) -> tuple[str, ...]:
+        return tuple(self._sessions)
+
+    def session_busy(self, conv_id: str) -> bool:
+        sess = self._sessions.get(conv_id)
+        if sess is None:
+            return False
+        curr = sess.current
         if curr is None:
             return False
         if curr is _TURN_RESERVED:
@@ -323,6 +383,10 @@ class AgentService:
         # until explicitly cleared.
         return True
 
+    @property
+    def busy(self) -> bool:
+        return self.session_busy(self.active_conv)
+
     def start(self) -> None:
         if self._provider is not None:
             return
@@ -331,15 +395,19 @@ class AgentService:
         LOG.info("agent portal started")
 
     def _close_engine_clients(self) -> None:
-        """Close the current engine's HTTP resources on the portal loop.
+        """Close the ACTIVE session's engine HTTP resources (legacy shim)."""
+        self._close_session_clients(self._session(self.active_conv))
+
+    def _close_session_clients(self, sess: _Session) -> None:
+        """Close a session engine's HTTP resources on the portal loop.
 
         Must run BEFORE the portal dies (aclose on a dead loop raises) and
         before a replacement engine is installed (or the old pool leaks).
         Failures are logged, never raised — shutdown paths call this
         best-effort.
         """
-        client, http = self._engine_client, self._engine_http
-        self._engine_client, self._engine_http = None, None
+        client, http = sess.client, sess.http
+        sess.client, sess.http = None, None
         portal = self._portal
         if portal is None:
             return
@@ -358,11 +426,11 @@ class AgentService:
                 LOG.debug("engine %s close: %s", label, exc)
 
     def stop(self) -> None:
-        self._close_engine_clients()
+        for sess in list(self._sessions.values()):
+            self._close_session_clients(sess)
         provider, self._provider = self._provider, None
         self._portal = None
-        self._current = None
-        self._kani = None
+        self._sessions.clear()
         if provider is not None:
             try:
                 provider.__exit__(None, None, None)
@@ -375,17 +443,15 @@ class AgentService:
         portal raises 'This portal is not running' for every later call)."""
         old, self._provider = self._provider, None
         self._portal = None
-        self._current = None
         if old is not None:
             try:
                 old.__exit__(None, None, None)
             except Exception as exc:
                 LOG.warning("old portal teardown: %s", exc)
-        # The old engine's httpx pool/transport was created under the dead
-        # portal's loop: reusing it raises "Event loop is closed" or binds a
-        # live client to a dead loop. Force a rebuild on the next turn.
-        self._close_engine_clients()
-        self._kani = None
+        # Every session's engine/pool was built under the dead portal's loop:
+        # reusing them raises "Event loop is closed" or binds a live client to
+        # a dead loop. Drop all sessions so the next turn rebuilds cleanly.
+        self._sessions.clear()
         self._model = ""
         self.start()
         LOG.warning("agent portal restarted")
@@ -443,7 +509,10 @@ class AgentService:
         model: str,
         system_prompt: str,
         on_thought: ThoughtCB | None = None,
+        conv_id: str | None = None,
     ) -> Kani | None:
+        conv = conv_id if conv_id is not None else self.active_conv
+        sess = self._session(conv)
         base = state.gateway_base_url
         provider = _active_provider(self.settings)
         base = str(provider.base_url).rstrip("/") if provider is not None else base
@@ -451,9 +520,9 @@ class AgentService:
             return None
         tools, tools_gen = self._current_tools()
         if (
-            self._kani is not None
+            sess.kani is not None
             and self._model == model
-            and self._system == system_prompt
+            and strip_clock_line(self._system) == strip_clock_line(system_prompt)
             and self._base == base
             and self._tools_gen == tools_gen
             and self._retry == self.settings.tool_retry_attempts
@@ -461,14 +530,18 @@ class AgentService:
         ):
             # Same turn shape: reuse the engine, but re-point its reasoning tap
             # so a rebuild is not needed to capture this turn's thoughts.
-            engine = getattr(self._kani, "engine", None)
+            engine = getattr(sess.kani, "engine", None)
             if engine is not None and hasattr(engine, "on_thought"):
                 engine.on_thought = on_thought
-            return self._kani
-        history = list(self._kani.chat_history) if self._kani is not None else []
+            # The clock line stamps seconds, so the prompt text moves every
+            # send while meaning the same thing; swap the baked system message
+            # instead of paying a full engine rebuild per send.
+            self._refresh_system_message(system_prompt, sess)
+            return sess.kani
+        history = list(sess.kani.chat_history) if sess.kani is not None else []
         # Close the outgoing engine's HTTP resources BEFORE replacing it:
         # every rebuild otherwise leaks a connection pool on the portal loop.
-        self._close_engine_clients()
+        self._close_session_clients(sess)
         # The reasoning tap is delivered via an attribute rather than a third
         # positional argument so an injected 2-arg engine_factory keeps working.
         self._on_thought = on_thought
@@ -481,13 +554,12 @@ class AgentService:
         # pool. Read defensively for injected test engines.
         sdk_client = getattr(engine, "client", None)
         inner = getattr(sdk_client, "_client", None)
-        http_client = inner if isinstance(inner, httpx.AsyncClient) else None
-        self._engine_client = sdk_client
-        self._engine_http = http_client
+        sess.client = sdk_client
+        sess.http = inner if isinstance(inner, httpx.AsyncClient) else None
         # GuardedKani: per-tool 30s timeout inside do_function_call, so a
         # hung MCP tool becomes an error FUNCTION result (model continues)
         # instead of wedging the turn with busy stuck True.
-        self._kani = GuardedKani(
+        sess.kani = GuardedKani(
             engine,
             system_prompt=system_prompt or None,
             chat_history=history,
@@ -500,13 +572,52 @@ class AgentService:
         self._tools_gen = tools_gen
         self._retry = self.settings.tool_retry_attempts
         self._ctx = self.settings.max_context_tokens
-        LOG.info("kani ready model=%s base=%s tools=%d", model, base, len(tools))
-        return self._kani
+        LOG.info(
+            "kani ready conv=%s model=%s base=%s tools=%d",
+            conv,
+            model,
+            base,
+            len(tools),
+        )
+        return sess.kani
 
-    def reset_conversation(self) -> None:
-        if self._kani is not None:
-            self._kani.chat_history.clear()
-        LOG.info("conversation reset")
+    def _refresh_system_message(self, system_prompt: str, sess: _Session | None = None) -> None:
+        """Swap a session's baked system message for the current prompt text.
+
+        get_prompt() reads always_included_messages, never self.system_prompt,
+        so the per-send clock line (seconds change each send) only needs this
+        one message replaced — not a whole engine rebuild.
+        """
+        kani = (sess or self._session(self.active_conv)).kani
+        if kani is None:
+            return
+        always = getattr(kani, "always_included_messages", None)
+        if always is None:
+            # Test stub or exotic kani shape: nothing to swap, just bookkeeping.
+            self._system = system_prompt
+            return
+        if system_prompt:
+            fresh = ChatMessage.system(system_prompt.strip())
+            if always and "system" in _message_role(always[0]):
+                always[0] = fresh
+            else:
+                always.insert(0, fresh)
+        elif always and "system" in _message_role(always[0]):
+            always.pop(0)
+        self._system = system_prompt
+
+    def reset_conversation(self, conv_id: str | None = None) -> None:
+        """Drop a conversation's session entirely.
+
+        The kani (with its history) is discarded and the engine pool is closed
+        on the portal. Used for "new chat" on the freshly-created id and for
+        pruning sessions nobody is viewing or streaming into.
+        """
+        conv = conv_id if conv_id is not None else self.active_conv
+        sess = self._sessions.pop(conv, None)
+        if sess is not None:
+            self._close_session_clients(sess)
+        LOG.info("conversation reset conv=%s", conv)
 
     # turns
 
@@ -548,26 +659,31 @@ class AgentService:
         on_error: ErrorCB,
         on_tool: ToolCB | None = None,
         on_settled: Callable[[], None] | None = None,
+        conv_id: str | None = None,
     ) -> bool:
+        conv = conv_id if conv_id is not None else self.active_conv
+        sess = self._session(conv)
         if self._portal is None:
             on_error("config", "Agent is not running.")
             return False
         with self._turn_lock:
-            if self.busy:
+            if self.session_busy(conv):
                 return False
             # Reserve the turn under the lock: a second caller racing past
             # the check would otherwise dispatch a parallel _run against the
             # same chat_history and lose one task handle (uncancellable).
-            self._current = _TURN_RESERVED
+            # Per SESSION: two different conversations may turn in parallel.
+            sess.current = _TURN_RESERVED
+            sess.cancel_on_dispatch = False
         if not state.gateway_running:
             with self._turn_lock:
-                self._current = None
+                sess.current = None
             on_error("offline", "Gateway is not running. Start it on the Server tab.")
             return False
-        kani = self._kani
+        kani = sess.kani
         if kani is None:
             with self._turn_lock:
-                self._current = None
+                sess.current = None
             on_error("config", "No model selected.")
             return False
 
@@ -652,12 +768,6 @@ class AgentService:
         async def _run() -> None:
             done_fired = False
             last_message: Any = None
-            # Per-tool ceiling: one hung MCP/stdio tool used to wedge the
-            # whole turn with no error, no log, and busy stuck True — the
-            # UI just sat on a spinner. kani has no per-call timeout, so
-            # bound the FUNCTION-result wait here; the model turn itself is
-            # bounded by the gateway's own read timeout.
-            tool_timeout = 60.0
             try:
                 async for manager in kani.full_round_stream(
                     prompt,
@@ -671,18 +781,17 @@ class AgentService:
                             if chunk:
                                 _safe_callback("on_delta", lambda: on_delta(chunk))
                     try:
-                        async with asyncio.timeout(tool_timeout):
+                        async with asyncio.timeout(TURN_CEILING_S):
                             message = await manager.message()
                     except TimeoutError:
-                        tool_name = str(getattr(manager, "name", "tool") or "tool")
-                        LOG.warning("tool %s timed out after %ss", tool_name, tool_timeout)
+                        LOG.error("round stalled past %.0fs; aborting turn", TURN_CEILING_S)
                         _safe_callback(
                             "on_error",
                             lambda: on_error(
-                                "tool_timeout",
-                                f"Tool '{tool_name}' timed out after {tool_timeout:.0f}s. "
-                                "The server may be slow or stuck. Try again, or "
-                                "disable it in Settings, MCP.",
+                                "turn_timeout",
+                                "The turn stalled with no reply for "
+                                f"{TURN_CEILING_S:.0f}s and was stopped. "
+                                "Try again, or disable slow tools in Settings.",
                             ),
                         )
                         done_fired = True
@@ -799,7 +908,7 @@ class AgentService:
                 _safe_callback("on_error", lambda: on_error("error", detail))
             finally:
                 with self._turn_lock:
-                    self._current = None
+                    sess.current = None
                 if on_settled is not None:
                     # Fires even when on_done/on_error raised — the controller
                     # uses it to guarantee the UI busy flag clears (forensics R6).
@@ -808,30 +917,57 @@ class AgentService:
                     except Exception as exc:
                         LOG.warning("turn settled callback failed: %s", exc)
 
+        # Dispatch WITHOUT the lock held: start_task_soon is a synchronous
+        # round-trip INTO the portal loop, and a settling turn's finally takes
+        # this same lock ON that loop — holding it here deadlocks the two
+        # threads (parallel-sessions discovery: dispatch of B stuck behind
+        # A's finally, A's finally stuck behind the dispatch).
         try:
-            with self._turn_lock:
-                self._current = self._portal.start_task_soon(_run)
+            task = self._portal.start_task_soon(_run)
         except RuntimeError as exc:
             # A poisoned portal (task-group collapse) used to kill the send
             # worker here: unhandled, no error row, busy stuck True forever.
             LOG.warning("turn dispatch failed (%s); restarting portal once", exc)
             self.restart_portal()
             try:
-                with self._turn_lock:
-                    self._current = self._portal.start_task_soon(_run)
+                task = self._portal.start_task_soon(_run)
             except Exception as retry_exc:
                 LOG.error("portal unusable after restart: %s", retry_exc)
                 with self._turn_lock:
-                    self._current = None
+                    sess.current = None
                 on_error("config", "Engine crashed. Restart LM Router.")
                 return False
+            # The restart dropped every session; re-adopt ours so the running
+            # turn stays visible to busy/stop instead of double-dispatching.
+            with self._turn_lock:
+                self._sessions.setdefault(conv, sess)
+        with self._turn_lock:
+            if sess.current is _TURN_RESERVED:
+                sess.current = task
+            elif sess.cancel_on_dispatch:
+                # stop_turn released the reservation while we were dispatching
+                # — honor it now that there is a real handle to cancel.
+                sess.cancel_on_dispatch = False
+                cancel = getattr(task, "cancel", None)
+                if cancel is not None:
+                    try:
+                        cancel()
+                    except Exception as exc:
+                        LOG.warning("stop failed: %s", exc)
         return True
 
-    def stop_turn(self) -> None:
+    def stop_turn(self, conv_id: str | None = None) -> None:
+        conv = conv_id if conv_id is not None else self.active_conv
+        sess = self._sessions.get(conv)
+        if sess is None:
+            return
         with self._turn_lock:
-            current, self._current = self._current, None
-        # The reservation sentinel is not a task: nothing to cancel, and
-        # clearing it above already released the turn.
+            current, sess.current = sess.current, None
+            if current is _TURN_RESERVED:
+                # The task does not exist yet (dispatcher is mid-submit):
+                # flag it so the dispatcher cancels the real handle on arrival.
+                sess.cancel_on_dispatch = True
+        # The reservation sentinel is not a task: nothing to cancel here.
         if current is None or current is _TURN_RESERVED:
             return
         try:

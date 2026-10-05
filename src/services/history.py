@@ -11,6 +11,7 @@ import unicodedata
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from core import storage
 from core.logging import LOG
@@ -92,6 +93,24 @@ def _title_from_file(path: Path) -> str:
     return path.stem
 
 
+# Titles parsed out of conversation JSON, keyed (path, mtime_ns, size). The
+# directory is re-listed twice per turn (prune inside save + the save task);
+# without this, every list re-read and JSON-parses every file just to recover
+# a 48-char title.
+_title_cache: dict[tuple[str, int, int], str] = {}
+
+
+def _cached_title(path: Path, st: os.stat_result) -> str:
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    title = _title_cache.get(key)
+    if title is None:
+        title = _title_from_file(path)
+        if len(_title_cache) > 256:
+            _title_cache.clear()
+        _title_cache[key] = title
+    return title
+
+
 def list_conversations() -> list[dict]:
     try:
         paths = list(storage.conversations_dir().glob("*.json"))
@@ -103,10 +122,11 @@ def list_conversations() -> list[dict]:
     items = []
     for path in paths:
         try:
-            mtime = path.stat().st_mtime
+            st = path.stat()
         except OSError as exc:
             LOG.warning("conversation file unreadable (%s): %s", path.name, exc)
             continue
+        mtime = st.st_mtime
         try:
             when = datetime.fromtimestamp(mtime).astimezone()
             relative = _humanize(when)
@@ -118,7 +138,7 @@ def list_conversations() -> list[dict]:
         items.append(
             {
                 "id": path.stem,
-                "title": _title_from_file(path),
+                "title": _cached_title(path, st),
                 "relative": relative,
                 "updated": updated,
                 "mtime": mtime,
@@ -143,24 +163,33 @@ def conversation_path(conversation_id: str) -> Path:
     return storage.conversations_dir() / f"{safe}.json"
 
 
-def save_conversation(agent: AgentService) -> bool:
-    """Persist the active conversation; False when the save failed (surfaced
-    by the caller — a silently lost conversation is user-visible data loss).
+def save_conversation(agent: AgentService, conversation_id: str | None = None) -> bool:
+    """Persist one conversation; False when the save failed (surfaced by the
+    caller — a silently lost conversation is user-visible data loss).
 
-    Pure IO: state.conversations is refreshed by the caller on the UI loop.
+    `conversation_id` pins WHICH session is saved: a background turn finishing
+    after the user switched away must land in its own file, not whatever is
+    active now. Pure IO: state.conversations is refreshed by the caller.
     """
-    if not state.active_conversation or agent.kani is None:
+    conv = conversation_id or state.active_conversation
+    # Duck-typed agents (tests) only carry .kani; real agents expose the
+    # per-conversation session map.
+    if conversation_id is not None and hasattr(agent, "session_kani"):
+        kani = agent.session_kani(conversation_id)
+    else:
+        kani = getattr(agent, "kani", None)
+    if not conv or kani is None:
         return True
     now = time.time()
     _prune_tombstones(now)
-    if state.active_conversation in _tombstones:
+    if conv in _tombstones:
         # The user deleted this chat while a save was in flight; the delete
         # intent wins. Returns True (deliberate deviation from DDGS's False)
         # so the caller does not toast a bogus "not saved" error for a save
         # that SHOULD not happen.
-        LOG.debug("refusing to save %s: it was just deleted", state.active_conversation)
+        LOG.debug("refusing to save %s: it was just deleted", conv)
         return True
-    path = conversation_path(state.active_conversation)
+    path = conversation_path(conv)
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -169,13 +198,13 @@ def save_conversation(agent: AgentService) -> bool:
         # backup. save_format is PINNED because the .tmp suffix would
         # otherwise flip kani to its ZIP format silently (it infers format
         # from the suffix). .tmp also keeps leftovers out of the *.json glob.
-        agent.kani.save(str(tmp), save_format="json")
+        kani.save(str(tmp), save_format="json")
         with contextlib.suppress(OSError):
             os.chmod(tmp, 0o600)
-        if state.active_conversation in _tombstones:
+        if conv in _tombstones:
             # Re-check AFTER the write: clear_all ran while kani.save was in
             # flight. Replacing now would resurrect a deleted chat.
-            LOG.debug("dropping save of %s: deleted mid-write", state.active_conversation)
+            LOG.debug("dropping save of %s: deleted mid-write", conv)
             with contextlib.suppress(OSError):
                 tmp.unlink(missing_ok=True)
             return True
@@ -187,7 +216,7 @@ def save_conversation(agent: AgentService) -> bool:
         with contextlib.suppress(OSError):
             tmp.unlink(missing_ok=True)
         return False
-    prune_conversations(protect=state.active_conversation)
+    prune_conversations(protect=conv)
     return True
 
 
@@ -219,33 +248,37 @@ def prune_conversations(limit: int = MAX_CONVERSATIONS, *, protect: str = "") ->
 def load_conversation(
     agent: AgentService, conversation_id: str, *, apply_state: bool = True
 ) -> bool:
-    """Load a saved conversation into the agent.
+    """Load a saved conversation into ITS OWN session.
 
-    apply_state=False keeps this pure IO/kani work so callers can run it on a
-    worker thread; the controller then applies state in the Flet context
-    (forensics R5: observable writes off-context can fail silently).
+    Sessions are per conversation: loading must never mutate the kani another
+    conversation may be streaming on (that constraint is what used to force
+    "stop the generation first" before every switch). apply_state=False keeps
+    this pure IO/kani work so callers can run it on a worker thread; the
+    controller then applies state in the Flet context (forensics R5:
+    observable writes off-context can fail silently).
     """
     path = conversation_path(conversation_id)
-    if not path.exists() or agent.kani is None:
+    kani = agent.session_kani(conversation_id)
+    if not path.exists() or kani is None:
         return False
     try:
-        agent.kani.load(str(path))
+        kani.load(str(path))
     except Exception as exc:
         LOG.warning("conversation load failed: %s", exc)
         return False
     if apply_state:
         state.active_conversation = conversation_id
-        state.messages = messages_from_history(agent)
-    LOG.info("loaded conversation %s (%d messages)", conversation_id, len(agent.kani.chat_history))
+        state.messages = messages_from_history(kani)
+    LOG.info("loaded conversation %s (%d messages)", conversation_id, len(kani.chat_history))
     return True
 
 
-def messages_from_history(agent: AgentService) -> list[dict]:
-    """Project kani history into display messages (text only, v1)."""
+def messages_from_history(kani: Any) -> list[dict]:
+    """Project a kani history into display messages (text only, v1)."""
     messages: list[dict] = []
-    if agent.kani is None:
+    if kani is None:
         return messages
-    for message in agent.kani.chat_history:
+    for message in kani.chat_history:
         role = str(getattr(message, "role", "")).lower()
         text = str(getattr(message, "text", "") or "")
         if not text:

@@ -13,6 +13,7 @@ Two delivery routes, because each misses cases the other catches:
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -42,17 +43,23 @@ def prompt_line() -> str:
     )
 
 
+_CLOCK_LINE_RE = re.compile(r"(?m)^Current date and time:.*(?:\n|$)")
+
+
+def strip_clock_line(text: str) -> str:
+    """The prompt minus any clock line.
+
+    The line embeds seconds, so callers that compare prompts for equality
+    (engine reuse) must strip it first or the comparison fails every send.
+    """
+    return _CLOCK_LINE_RE.sub("", (text or "")).strip()
+
+
 def with_clock(system_prompt: str, enabled: bool) -> str:
     """Append the clock line to the system prompt when enabled."""
-    import re as _re
-
-    base = (system_prompt or "").strip()
+    base = strip_clock_line(system_prompt)
     if not enabled:
         return base
-    # Strip stale clock lines first: the line embeds seconds, so an exact
-    # `line in base` check misses a line stamped a second earlier and long
-    # sessions accumulate duplicate clock lines.
-    base = _re.sub(r"(?m)^Current date and time:.*(?:\n|$)", "", base).strip()
     line = prompt_line()
     return f"{base}\n\n{line}" if base else line
 

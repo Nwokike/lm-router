@@ -1335,6 +1335,29 @@ def SettingsScreen():
                 ],
             ),
         ),
+        # The cap the model feels: every enabled tool's schema rides along on
+        # each round, so show the budget where users flip tools on and off.
+        _pad(
+            ft.Row(
+                spacing=tokens.SPACE_XS,
+                controls=[
+                    ft.Text(
+                        f"{len(state.mcp_tools)} / {state.mcp_tool_limit} tools"
+                        if state.mcp_tool_limit
+                        else f"{len(state.mcp_tools)} tools",
+                        size=tokens.FONT_SM,
+                        weight=ft.FontWeight.W_600,
+                    ),
+                    ft.Text(
+                        "limit reached: disable one to enable another"
+                        if state.mcp_tool_limit and len(state.mcp_tools) >= state.mcp_tool_limit
+                        else "enabled",
+                        size=tokens.FONT_XS,
+                        color=theme.dim(is_dark),
+                    ),
+                ],
+            ),
+        ),
     ]
     for server in settings.mcp_servers:
         result = state.mcp_test_results.get(server.id)

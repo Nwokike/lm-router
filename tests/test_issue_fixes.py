@@ -128,6 +128,9 @@ def test_tool_timeout_surfaces_error_row(monkeypatch) -> None:
         import services.agent as agent_mod
 
         monkeypatch.setattr(agent_mod, "estimate_turn_tokens", lambda **k: (10, False))
+        # The stub round never completes; a small ceiling fires on_error fast
+        # instead of relying on agent.stop() to cancel the parked task.
+        monkeypatch.setattr(agent_mod, "TURN_CEILING_S", 0.2)
         started = agent.start_turn(
             "hi",
             on_delta=lambda c: None,

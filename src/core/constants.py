@@ -20,6 +20,13 @@ CONVERSATIONS_DIR = "conversations"
 LOG_RING_SIZE = 500
 INTERSTITIAL_EVERY = 3
 
+# Hard ceiling on tools the model sees at once (MCP + built-ins). Every
+# enabled tool's schema rides along on EVERY model round, and free models
+# degrade visibly past a few dozen similar tools. Enabling past the cap
+# requires disabling another; a newly-enabled server's overflow tools are
+# auto-disabled (oldest servers keep theirs).
+MAX_AGENT_TOOLS = 70
+
 # Production AdMob units (from the AdMob console, 2026-09-25).
 # USE_TEST_IDS stays False; CI fails any build whose files carry the Google
 # test publisher prefix, so a test unit can never ship by accident.

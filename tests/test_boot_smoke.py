@@ -490,10 +490,12 @@ def test_boot_lists_conversations_off_thread(boot_page) -> None:
         state.conversations = previous
 
 
-def test_history_mutations_obey_the_busy_guard(boot_page) -> None:
-    """Clear/delete must refuse mid-stream (the running turn would rewrite
-    the file), deleting a DIFFERENT chat mid-stream stays allowed, and
-    deleting the ACTIVE chat while idle rotates to a fresh conversation."""
+def test_history_mutations_work_mid_stream(boot_page) -> None:
+    """Sessions are per conversation, so mid-stream history mutations no
+    longer refuse: clear-all works (the in-flight turn's save is refused by
+    the tombstone), deleting a DIFFERENT chat works, and deleting the ACTIVE
+    chat rotates to a fresh conversation. A turn streaming into a deleted
+    conversation must not resurrect its file when it finishes saving."""
     import os
     from pathlib import Path
 
@@ -526,32 +528,25 @@ def test_history_mutations_obey_the_busy_guard(boot_page) -> None:
     state.messages = [{"role": "user", "content": "streaming"}]
     try:
         state.busy = True
-        threads_before = len(boot_page.threads)
 
-        controller.methods.clear_history()
-        controller.methods.delete_conversation("busyactive01")
-        assert len(boot_page.threads) == threads_before, "busy must refuse before spawning work"
-        assert active.exists() and other.exists()
-        # _notify_info surfaces via SnackBar (state.notice is the error path).
-        snacks = [
-            getattr(getattr(dialog, "content", None), "value", "") for dialog in boot_page.dialogs
-        ]
-        assert any("Stop the current generation" in text for text in snacks), snacks
-
-        # Deleting a different chat mid-stream IS allowed (DDGS parity).
+        # Deleting a different chat mid-stream (DDGS parity, unchanged).
         controller.methods.delete_conversation("busyother0001")
         boot_page.drain()
         assert not other.exists() and active.exists()
 
-        # Idle: deleting the ACTIVE chat rotates to a fresh conversation.
-        state.busy = False
-        state.active_conversation = "busyactive01"
-        old_id = state.active_conversation
+        # Deleting the ACTIVE chat mid-stream now rotates instead of refusing;
+        # the file is gone while the turn is still streaming.
         controller.methods.delete_conversation("busyactive01")
         boot_page.drain()
         assert not active.exists()
-        assert state.active_conversation != old_id, "active delete must rotate the id"
+        assert state.active_conversation != "busyactive01", "active delete must rotate the id"
         assert state.messages == [], "rotation must clear the transcript"
+
+        # The rotated-in conversation is NOT the deleted one: a save of the
+        # deleted id would be refused by the tombstone, never resurrect it.
+        from services import history as history_mod
+
+        assert "busyactive01" in history_mod._tombstones
     finally:
         state.busy = False
         state.active_conversation = previous_id

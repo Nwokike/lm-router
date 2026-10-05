@@ -67,6 +67,10 @@ class AppController:
         # _extra_tools without init() stay desktop (shell + read on).
         self._is_mobile: bool = False
         self._stop_requested = False
+        # Per-conversation display lists. state.messages POINTS at the active
+        # conversation's list; a background turn keeps writing into its own
+        # list after the user switches away (kani sessions are per conversation).
+        self._conv_messages: dict[str, list[dict]] = {}
         self._ui_loop: asyncio.AbstractEventLoop | None = None
         # 2Hz log-render budget (Sherlock's flusher pattern): log records
         # mark dirty; ONE task turns bursts into at most two renders/second.
@@ -200,6 +204,10 @@ class AppController:
         page.run_task(self._boot_conversations)
         if not state.active_conversation:
             history.start_conversation()
+        # Point the map at the VIEW's list — registering a fresh [] here would
+        # leave the first send streaming into a list the UI never renders.
+        self._conv_messages[state.active_conversation] = state.messages
+        self.services.agent.active_conv = state.active_conversation
 
         # connectivity: OS events + HTTP confirm, banner rendered by the shell
         try:
@@ -696,53 +704,84 @@ class AppController:
         LOG.info("model selected: %s", model)
 
     def _new_conversation(self) -> None:
-        if state.busy:
-            # Switching conversations mid-stream orphaned the turn's message
-            # index and could wedge the UI in busy (forensics R6).
-            self._notify_info("Stop the current generation first, or wait for it to finish.")
-            return
-        state.messages = []
+        # kani sessions are per conversation: any turn still streaming keeps
+        # running on ITS session and saves to ITS file when it finishes. There
+        # is nothing here a switch could corrupt, so no "stop first" gate.
+        cid = history.start_conversation()
+        self._conv_messages[cid] = []
+        self.services.agent.active_conv = cid
+        state.messages = self._conv_messages[cid]
+        state.busy = False
         state.context_used_tokens = 0
-        self.services.agent.reset_conversation()
-        history.start_conversation()
+        self._prune_idle_sessions(cid)
+
+    def _activate_conversation(self, conversation_id: str) -> None:
+        """Point the UI at a conversation's own message list."""
+        self.services.agent.active_conv = conversation_id
+        state.active_conversation = conversation_id
+        state.messages = self._conv_messages.setdefault(conversation_id, [])
+        state.busy = self.services.agent.session_busy(conversation_id)
+
+    def _prune_idle_sessions(self, keep: str) -> None:
+        """Close kani sessions no one is viewing or streaming into.
+
+        Every completed turn is saved immediately, so the file on disk is
+        current; a revisit reloads it into a fresh session.
+        """
+        agent = self.services.agent
+        for conv in agent.session_ids:
+            if conv == keep or agent.session_busy(conv):
+                continue
+            agent.reset_conversation(conv)
 
     def _on_page_error(self, event: object) -> None:
         text = str(getattr(event, "data", "") or event)
         LOG.error("unhandled UI error: %s", text)
         self._notify_error(f"UI error: {text[:180]}")
 
-    def _reset_busy(self) -> None:
-        state.busy = False
+    def _send_failed(
+        self,
+        content: str,
+        kind: str = "setup",
+        messages: list[dict] | None = None,
+        conversation_id: str = "",
+    ) -> None:
+        target = messages if messages is not None else state.messages
+        target.append({"role": "error", "content": content, "kind": kind})
+        if not conversation_id or conversation_id == state.active_conversation:
+            state.busy = False
 
-    def _send_failed(self, content: str, kind: str = "setup") -> None:
-        state.busy = False
-        state.messages.append({"role": "error", "content": content, "kind": kind})
+    def _clear_busy_if_active(self, conversation_id: str) -> None:
+        if conversation_id == state.active_conversation:
+            state.busy = False
 
-    def _begin_turn(self, text: str) -> int | None:
-        if self._stop_requested or not state.busy:
+    def _begin_turn(self, text: str, messages: list[dict]) -> int | None:
+        if self._stop_requested:
             return None
-        state.messages.append({"role": "user", "content": text})
-        state.messages.append({"role": "assistant", "content": ""})
-        return len(state.messages) - 1
+        messages.append({"role": "user", "content": text})
+        messages.append({"role": "assistant", "content": ""})
+        return len(messages) - 1
 
-    def _finish_rejected(self) -> None:
-        if state.messages:
-            tail = state.messages[-1]
+    def _finish_rejected(self, conversation_id: str, messages: list[dict]) -> None:
+        if messages:
+            tail = messages[-1]
             if tail.get("role") == "assistant" and tail.get("content") == "":
-                state.messages.pop()
-        state.busy = False
+                messages.pop()
+        if conversation_id == state.active_conversation:
+            state.busy = False
         # Guard failures (gateway/model/portal) fire on_error and replace
         # the empty assistant with an error row. The busy-rejection is the
         # ONLY silent path — surface it instead of doing nothing.
-        if not state.messages or state.messages[-1].get("role") != "error":
+        if not messages or messages[-1].get("role") != "error":
             self._notify_error(
                 "Message not sent: the agent is still finishing the previous request.",
             )
 
     def _stop_generation(self) -> None:
+        conv = state.active_conversation
         self._stop_requested = True
-        self.services.agent.stop_turn()
-        if not self.services.agent.busy:
+        self.services.agent.stop_turn(conv)
+        if not self.services.agent.session_busy(conv):
             # Stop can land BEFORE the worker got as far as starting a turn
             # (e.g. during first-time tokenizer warm-up) — never leave the UI
             # locked in "busy" forever.
@@ -762,6 +801,16 @@ class AppController:
             )
             return
         state.busy = True
+        # The turn is bound to ITS conversation from here on: every callback
+        # writes into `messages` (this conversation's list) and settles against
+        # `conv`, so switching conversations mid-stream cannot corrupt it.
+        # Adopt the view's list when nothing registered it yet (any path that
+        # set active_conversation directly).
+        conv = state.active_conversation
+        messages = self._conv_messages.get(conv)
+        if messages is None:
+            messages = state.messages
+            self._conv_messages[conv] = messages
         # Stuck-turn watchdog: if neither on_done/on_error/on_settled fires
         # within N seconds (a hung tool, a wedged portal, a lost callback),
         # the UI used to sit on a spinner forever with nothing in the log.
@@ -770,17 +819,15 @@ class AppController:
         self._turn_started_at = time.monotonic()
 
         def _watchdog() -> None:
-            try:
-                time.sleep(180)
-            except Exception:
-                return
+            # The Timer already waited 180s before invoking this.
             if watchdog_gen != self._turn_gen or not state.busy:
                 return
             LOG.error("turn watchdog fired after 180s with no settlement; freeing busy")
 
             def _apply() -> None:
-                state.busy = False
-                state.messages.append(
+                if conv == state.active_conversation:
+                    state.busy = False
+                messages.append(
                     {
                         "role": "error",
                         "content": (
@@ -794,14 +841,21 @@ class AppController:
 
             self._in_flet_ctx(_apply)()
 
-        threading.Thread(target=_watchdog, name="turn-watchdog", daemon=True).start()
+        # A plain Thread parked in sleep(180) leaked one sleeper per send; a
+        # cancellable Timer is retired the moment the turn settles.
+        prior = getattr(self, "_turn_timer", None)
+        if prior is not None:
+            prior.cancel()
+        self._turn_timer = threading.Timer(180.0, _watchdog)
+        self._turn_timer.daemon = True
+        self._turn_timer.start()
         self._stop_requested = False
         # ALL heavy work happens OFF the Flet event thread: constructing the
         # kani engine can trigger a one-time tiktoken BPE download
         # (requests.get with NO timeout inside tiktoken) — running it inline
         # froze the whole UI with no error and no log.
         try:
-            self.page.run_thread(self._send_message_worker, text)
+            self.page.run_thread(self._send_message_worker, text, conv, messages)
         except Exception as exc:
             # Never leave the UI stuck in busy if dispatch itself fails.
             LOG.error("send dispatch failed: %s", exc)
@@ -853,7 +907,9 @@ class AppController:
                 self._notify_error("Nothing to regenerate yet.")
                 return
             self._in_flet_ctx(self._arm_turn)()
-            self._send_message_worker(text)
+            conv = state.active_conversation
+            self._conv_messages[conv] = state.messages
+            self._send_message_worker(text, conv, state.messages)
 
         self.page.run_thread(work)
 
@@ -869,11 +925,13 @@ class AppController:
         def work() -> None:
             self._in_flet_ctx(self._truncate_for_retry)()
             self._in_flet_ctx(self._arm_turn)()
-            self._send_message_worker(new_text)
+            conv = state.active_conversation
+            self._conv_messages[conv] = state.messages
+            self._send_message_worker(new_text, conv, state.messages)
 
         self.page.run_thread(work)
 
-    def _send_message_worker(self, text: str) -> None:
+    def _send_message_worker(self, text: str, conv: str, messages: list[dict]) -> None:
         agent = self.services.agent
         # Reasoning + answer buffers. Reasoning arrives first and is kept
         # separate so the UI can collapse it when the answer starts.
@@ -881,29 +939,31 @@ class AppController:
 
         def flush() -> None:
             try:
-                state.messages[index] = {
+                messages[index] = {
                     "role": "assistant",
                     "content": buffer["text"],
                     "reasoning": buffer["thought"],
                 }
             except (IndexError, RuntimeError) as exc:
-                # Conversation was cleared/switched mid-stream (forensics R6):
-                # never let this kill the portal task and wedge `busy`.
+                # Conversation was cleared mid-stream (forensics R6): never
+                # let this kill the portal task and wedge `busy`.
                 LOG.debug("flush skipped: %s", exc)
 
         def on_thought(chunk: str) -> None:
             buffer["thought"] += chunk
             now = time.monotonic()
-            # Reasoning is a slow trickle; 150ms keeps it visibly live without
-            # rebuilding the markdown answer on every fragment.
-            if now - buffer["thought_last"] >= 0.15:
+            # Reasoning trickles; 500ms (DDGS parity) keeps it visibly live —
+            # every flush rebuilds the whole message list on the UI loop.
+            if now - buffer["thought_last"] >= 0.5:
                 buffer["thought_last"] = now
                 flush()
 
         def on_delta(chunk: str) -> None:
             buffer["text"] += chunk
             now = time.monotonic()
-            if now - buffer["last"] >= 0.08:
+            # 200ms: each flush is a full ChatScreen rebuild plus a blocking
+            # cross-thread marshal; 80ms starved the UI loop mid-stream.
+            if now - buffer["last"] >= 0.2:
                 buffer["last"] = now
                 flush()
 
@@ -912,16 +972,19 @@ class AppController:
                 state.model,
                 self._system_prompt(),
                 self._in_flet_ctx(on_thought),
+                conv_id=conv,
             )
         except Exception as exc:
             LOG.error("model setup failed: %s", exc)
-            self._in_flet_ctx(self._send_failed)(f"Model setup failed: {str(exc)[:200]}")
+            self._in_flet_ctx(self._send_failed)(
+                f"Model setup failed: {str(exc)[:200]}", "setup", messages, conv
+            )
             return
         if self._stop_requested:
-            self._in_flet_ctx(self._reset_busy)()
+            self._in_flet_ctx(self._clear_busy_if_active)(conv)
             return
         if kani is None:
-            self._in_flet_ctx(self._send_failed)("No model selected yet.")
+            self._in_flet_ctx(self._send_failed)("No model selected yet.", "setup", messages, conv)
             return
         tool_err = agent.consume_tools_error()
         if tool_err:
@@ -930,12 +993,12 @@ class AppController:
             self._in_flet_ctx(self._notify_error)(
                 f"Tools unavailable. Running without search/tools ({tool_err[:100]}).",
             )
-        index = self._in_flet_ctx(self._begin_turn)(text)
+        index = self._in_flet_ctx(self._begin_turn)(text, messages)
         if index is None:
             return
 
         def on_tool(name: str, content: str, is_error: bool) -> None:
-            state.messages.append(
+            messages.append(
                 {
                     "role": "tool",
                     "name": name,
@@ -957,7 +1020,7 @@ class AppController:
                 # Non-chat-shaped replies (systemone/response endpoints) parse
                 # to None text — never show a silent empty bubble.
                 LOG.warning("empty/unrecognized reply model=%s; surfacing error", state.model)
-                state.messages[index] = {
+                messages[index] = {
                     "role": "error",
                     "content": (
                         "The model returned an empty or unrecognized response. "
@@ -967,7 +1030,7 @@ class AppController:
                     "kind": "empty",
                     "reasoning": buffer["thought"],
                 }
-                state.busy = False
+                self._clear_busy_if_active(conv)
                 return
             entry: dict = {"role": "assistant", "content": final}
             # Keep the reasoning the model showed: collapsed in the UI, but
@@ -978,26 +1041,26 @@ class AppController:
                 entry["usage"] = usage
                 total = int(usage.get("total_tokens") or 0)
                 state.context_used_tokens = total
-            state.messages[index] = entry
-            state.busy = False
+            messages[index] = entry
+            self._clear_busy_if_active(conv)
             state.sent_count += 1
             # File IO + re-list never runs on the UI loop (this callback does).
-            self.page.run_task(self._save_history_task)
+            self.page.run_task(self._save_history_task, conv)
             self._maybe_show_interstitial()
             LOG.info("turn done: %s tokens", (usage or {}).get("total_tokens", "?"))
 
         def on_error(kind: str, content: str) -> None:
             if kind == "stopped":
                 flush()
-                state.messages[index] = {**state.messages[index], "stopped": True}
+                messages[index] = {**messages[index], "stopped": True}
             elif buffer["text"]:
                 flush()
-                state.messages.append({"role": "error", "content": content, "kind": kind})
+                messages.append({"role": "error", "content": content, "kind": kind})
                 LOG.warning("turn error (%s): %s", kind, content)
             else:
-                state.messages[index] = {"role": "error", "content": content, "kind": kind}
+                messages[index] = {"role": "error", "content": content, "kind": kind}
                 LOG.warning("turn error (%s): %s", kind, content)
-            state.busy = False
+            self._clear_busy_if_active(conv)
 
         try:
             started = agent.start_turn(
@@ -1006,7 +1069,8 @@ class AppController:
                 self._in_flet_ctx(on_done),
                 self._in_flet_ctx(on_error),
                 on_tool=self._in_flet_ctx(on_tool),
-                on_settled=self._in_flet_ctx(self._on_turn_settled),
+                on_settled=self._in_flet_ctx(lambda: self._on_turn_settled(conv)),
+                conv_id=conv,
             )
         except Exception as exc:
             # start_turn itself raising used to kill this worker silently:
@@ -1014,16 +1078,26 @@ class AppController:
             LOG.error("turn dispatch failed: %s", exc)
             self._in_flet_ctx(self._send_failed)(
                 f"Could not start the request: {str(exc)[:180]}",
+                "setup",
+                messages,
+                conv,
             )
             return
         if not started:
-            self._in_flet_ctx(self._finish_rejected)()
+            self._in_flet_ctx(self._finish_rejected)(conv, messages)
 
-    def _on_turn_settled(self) -> None:
+    def _on_turn_settled(self, conversation_id: str = "") -> None:
         """Last-resort busy reset: fires even when on_done/on_error explode,
         so a callback failure can never wedge the UI in 'busy' forever."""
         # Retire the watchdog: a settled turn must not be "freed" later.
         self._turn_gen = getattr(self, "_turn_gen", 0) + 1
+        timer = getattr(self, "_turn_timer", None)
+        if timer is not None:
+            timer.cancel()
+        # A background conversation settling must not clear the view's busy:
+        # only the conversation the user is LOOKING at owns that flag.
+        if conversation_id and conversation_id != state.active_conversation:
+            return
         try:
             state.busy = False
         except Exception as exc:
@@ -1031,10 +1105,14 @@ class AppController:
             # from the context wrapper able to wedge busy (audit D).
             LOG.error("could not clear busy: %s", exc)
 
-    async def _save_history_task(self) -> None:
-        """Persist the conversation off the UI loop, then apply state on it."""
+    async def _save_history_task(self, conversation_id: str | None = None) -> None:
+        """Persist one conversation off the UI loop, then apply state on it."""
         try:
-            ok = await asyncio.to_thread(history.save_conversation, self.services.agent)
+            ok = await asyncio.to_thread(
+                history.save_conversation,
+                self.services.agent,
+                conversation_id,
+            )
             items = await asyncio.to_thread(history.list_conversations)
         except Exception as exc:
             LOG.warning("conversation save failed: %s", exc)
@@ -1354,8 +1432,12 @@ class AppController:
             tools.append(self._time_tool)
         # Search is MCP-only now (Exa + Parallel builtins): no hand-rolled
         # web_search tool, no direct-HTTP fallbacks. The model picks a
-        # vendor tool when research is needed.
-        tools.extend(self.services.mcp.tools)
+        # vendor tool when research is needed. Defensive cap: even if
+        # settings and the hub disagree, kani never sees more than
+        # MAX_AGENT_TOOLS in total.
+        after_mcp = 3 + (0 if self._is_mobile else 2)  # router tools + shell/read
+        mcp_budget = max(0, constants.MAX_AGENT_TOOLS - len(tools) - after_mcp)
+        tools.extend(self.services.mcp.tools[:mcp_budget])
         tools.extend(
             (
                 self._router_status_tool,
@@ -1368,6 +1450,22 @@ class AppController:
             # worth reading (same gate as stdio MCP).
             tools.extend((self._shell_tool, self._read_tool))
         return tools, (f"{self.services.mcp.generation}:{self.settings.tell_model_time}:router4")
+
+    def _builtin_tool_count(self) -> int:
+        count = 3  # router status/models/probe
+        if not self._is_mobile:
+            count += 2  # shell + read
+        if self.settings.tell_model_time:
+            count += 1  # current_time
+        return count
+
+    def _tool_count(self) -> int:
+        """Everything the model currently sees (built-ins + enabled MCP)."""
+        return self._builtin_tool_count() + len(self.services.mcp.tools)
+
+    def _mcp_tool_budget(self) -> int:
+        """How many MCP tools may be enabled at once."""
+        return max(0, constants.MAX_AGENT_TOOLS - self._builtin_tool_count())
 
     def _system_prompt(self) -> str:
         """The built-in router guide (when enabled), the stored prompt, plus
@@ -1436,6 +1534,8 @@ class AppController:
 
         def _apply() -> None:
             state.mcp_tools = names or []
+            # The counter the Settings UI renders against.
+            state.mcp_tool_limit = self._mcp_tool_budget()
             # Every _connect path ends in _status, so clearing here covers
             # all ends (success, partial, failure, empty config).
             state.mcp_connecting = False
@@ -1443,6 +1543,10 @@ class AppController:
                 LOG.info("mcp tools active: %d", len(names))
             if error:
                 self._notify_error(error)
+            # A connect that lands over the cap (a newly-enabled server) gets
+            # its overflow auto-disabled here; the reconnect it triggers
+            # re-emits a status inside the budget.
+            self._enforce_tool_cap(names or [])
 
         self._run_on_ui(_apply)()
 
@@ -1508,6 +1612,15 @@ class AppController:
         for server in self.settings.mcp_servers:
             if server.id == server_id:
                 if tool_name in server.disabled_tools:
+                    # Enabling: respect the global tool cap (swap to enable).
+                    # The bump below still runs so the Switch visual reverts.
+                    if self._tool_count() >= constants.MAX_AGENT_TOOLS:
+                        limit = constants.MAX_AGENT_TOOLS
+                        self._notify_info(
+                            f"Tool limit reached ({limit}/{limit}). Disable another tool first."
+                        )
+                        state.settings_version += 1
+                        return
                     server.disabled_tools.remove(tool_name)
                 else:
                     server.disabled_tools.append(tool_name)
@@ -1517,6 +1630,43 @@ class AppController:
         # a tab switch remounted the screen.
         state.settings_version += 1
         self._reapply_mcp()
+
+    def _enforce_tool_cap(self, names: list[str]) -> None:
+        """Auto-disable MCP tools past the cap (oldest enabled servers win).
+
+        A single server enable can add dozens of tools at once, and a
+        server's real tool list is only known AFTER it connects — so the cap
+        is enforced here, on the connect result: overflow names are persisted
+        into each server's disabled_tools and a reconnect applies them. The
+        second pass is stable because the overflow is now disabled.
+        """
+        budget = self._mcp_tool_budget()
+        if len(names) <= budget:
+            return
+        changed = 0
+        remaining = budget
+        for server in self.settings.mcp_servers:
+            if not server.enabled:
+                continue
+            prefix = f"{server.name}."
+            server_tools = [n for n in names if n.startswith(prefix)]
+            keep, overflow = server_tools[:remaining], server_tools[remaining:]
+            remaining -= len(keep)
+            for qualified in overflow:
+                base = qualified[len(prefix) :]
+                if base not in server.disabled_tools:
+                    server.disabled_tools.append(base)
+                    changed += 1
+        if not changed:
+            return
+        self.settings.save()
+        state.settings_version += 1
+        self._reapply_mcp()
+        self._notify_info(
+            f"Tool limit reached ({constants.MAX_AGENT_TOOLS}). "
+            f"{changed} tool(s) were disabled. Free space and re-enable them."
+        )
+        LOG.warning("tool cap enforced: disabled %d tools", changed)
 
     def _test_mcp_server(self, server_id: str, done_cb) -> None:
         hub = self.services.mcp
@@ -1697,11 +1847,9 @@ class AppController:
         state.conversations = items
 
     def _clear_history(self) -> None:
-        if state.busy:
-            # The in-flight turn would rewrite the file just cleared —
-            # refuse with a reason instead of racing it (DDGS _busy_refuse).
-            self._notify_info("Stop the current generation before clearing the history.")
-            return
+        # No busy gate: saves of conversations deleted mid-flight are refused
+        # by the tombstone check in save_conversation, so an in-flight turn
+        # cannot resurrect a cleared file.
 
         # File IO + full re-list/parse (O(n x size)) runs on a worker, never
         # the UI thread (forensics R4); state lands via the Flet context.
@@ -1713,19 +1861,32 @@ class AppController:
         self.page.run_thread(work)
 
     def _open_conversation(self, conversation_id: str) -> None:
-        if state.busy:
-            self._notify_info("Stop the current generation before opening a conversation.")
+        # Sessions are per conversation: opening another chat never touches
+        # the kani a running turn is streaming on, so this works mid-stream.
+        agent = self.services.agent
+        if conversation_id == state.active_conversation:
+            return
+        if agent.session_kani(conversation_id) is not None:
+            # In-memory session: it already holds the newest turns and its
+            # display list is live.
+            self._activate_conversation(conversation_id)
+            self._set_tab(0)
             return
 
         def work() -> None:
-            agent = self.services.agent
             try:
-                kani = agent.ensure_kani(state.model, self._system_prompt())
+                kani = agent.ensure_kani(
+                    state.model,
+                    self._system_prompt(),
+                    conv_id=conversation_id,
+                )
             except Exception as exc:
                 LOG.error("conversation open setup failed: %s", exc)
+                agent.reset_conversation(conversation_id)
                 self._in_flet_ctx(self._notify_error)(f"Cannot open conversation: {str(exc)[:180]}")
                 return
             if kani is None:
+                agent.reset_conversation(conversation_id)
                 self._in_flet_ctx(self._notify_error)(
                     "Cannot open conversation: no model selected yet.",
                 )
@@ -1734,20 +1895,23 @@ class AppController:
                 ok = history.load_conversation(agent, conversation_id, apply_state=False)
             except Exception as exc:
                 LOG.error("conversation load failed: %s", exc)
+                agent.reset_conversation(conversation_id)
                 self._in_flet_ctx(self._notify_error)(
                     f"Could not load conversation: {str(exc)[:180]}"
                 )
                 return
-            self._in_flet_ctx(self._conversation_loaded)(ok, agent, conversation_id)
+            msgs = history.messages_from_history(kani)
+            self._in_flet_ctx(self._conversation_loaded)(ok, conversation_id, msgs)
 
         self.page.run_thread(work)
 
-    def _conversation_loaded(self, ok: bool, agent: Any, conversation_id: str) -> None:
+    def _conversation_loaded(self, ok: bool, conversation_id: str, msgs: list[dict]) -> None:
         if not ok:
+            self.services.agent.reset_conversation(conversation_id)
             self._notify_error("Could not load conversation. See the Activity log.")
             return
-        state.active_conversation = conversation_id
-        state.messages = history.messages_from_history(agent)
+        self._conv_messages[conversation_id] = msgs
+        self._activate_conversation(conversation_id)
         self._set_tab(0)
 
     def _delete_message_at(self, index: int) -> None:
@@ -1763,6 +1927,9 @@ class AppController:
             return
         keep = msgs[:index]
         state.messages = keep
+        # The session map must point at the SAME list the view shows, or the
+        # next streamed turn would write into the pre-cut list.
+        self._conv_messages[state.active_conversation] = keep
         agent = self.services.agent
         chat_history = agent.kani.chat_history if agent.kani is not None else None
         if chat_history is not None:
@@ -1800,12 +1967,8 @@ class AppController:
 
     def _delete_conversation(self, conversation_id: str) -> None:
         was_active = conversation_id == state.active_conversation
-        if was_active and state.busy:
-            # The running turn writes into this id when it finishes; deleting
-            # the ACTIVE chat mid-stream is the race DDGS guards exactly.
-            # Deleting a DIFFERENT chat while streaming is safe.
-            self._notify_info("Stop the current generation before deleting this conversation.")
-            return
+        # No busy gate: a turn streaming into a deleted conversation finishes
+        # harmlessly and its save is refused by the tombstone check.
 
         def work() -> None:
             ok = history.delete_conversation(conversation_id)

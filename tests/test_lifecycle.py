@@ -57,13 +57,15 @@ def test_engine_clients_tracked_and_closed_on_rebuild(monkeypatch) -> None:
     """ensure_kani must track the live SDK client and close it on rebuild."""
     agent = _boot(monkeypatch, lambda request: httpx.Response(200, json={}))
     try:
-        assert agent._engine_client is not None, "engine client not tracked"
-        first = agent._engine_client
+        sess = agent._session(agent.active_conv)
+        assert sess.client is not None, "engine client not tracked"
+        first = sess.client
         agent.ensure_kani("other-model", "be brief")
-        assert agent._engine_client is not first, "rebuild did not replace client"
+        assert sess.client is not first, "rebuild did not replace client"
     finally:
         agent.stop()
-    assert agent._engine_client is None, "stop did not clear tracked client"
+    sess = agent._session(agent.active_conv)
+    assert sess.client is None, "stop did not clear tracked client"
 
 
 def test_restart_portal_invalidates_stale_engine(monkeypatch) -> None:
@@ -124,7 +126,7 @@ def test_stop_during_reservation_is_safe(monkeypatch) -> None:
     agent = _agent(monkeypatch, lambda request: httpx.Response(200, json={}))
     agent.start()
     try:
-        agent._current = _TURN_RESERVED
+        agent._session(agent.active_conv).current = _TURN_RESERVED
         assert agent.busy is True
         agent.stop_turn()  # must be a silent no-op
         assert agent.busy is False
@@ -143,10 +145,11 @@ def test_busy_getter_does_not_mutate_finished_handle(monkeypatch) -> None:
     agent.start()
     try:
         handle = _Done()
-        agent._current = handle
+        sess = agent._session(agent.active_conv)
+        sess.current = handle
         assert agent.busy is False
         # Getter is read-only: the handle is still there for finally/stop.
-        assert agent._current is handle
+        assert sess.current is handle
     finally:
         agent.stop()
 
