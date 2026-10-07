@@ -132,10 +132,10 @@ def _default_engine_factory(
         api_key = "lm-router"
         target = "gateway"
 
-    max_retries = 2
+    max_retries = 1
 
     # Explicit client so a stalled endpoint can never hang a turn for the SDK's
-    # default 600s: read=90s bounds dead air BETWEEN chunks (streaming keeps
+    # default 600s: read=45s bounds dead air BETWEEN chunks (streaming keeps
     # chunks flowing, so slow-but-alive models are unaffected); retries capped.
     # The transport tees the SSE stream: kani discards reasoning deltas, so
     # this is the only place they can be captured.
@@ -143,7 +143,7 @@ def _default_engine_factory(
     http_client = build_thought_client(
         base_url=base_url,
         api_key=api_key,
-        timeout=httpx.Timeout(90.0, connect=5.0),
+        timeout=httpx.Timeout(45.0, connect=5.0),
         max_retries=max_retries,
         tap=tap,
     )

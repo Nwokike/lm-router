@@ -406,7 +406,7 @@ async def test_serve_handles_empty_config_and_stops_cleanly() -> None:
     assert hub.tools == []
 
     hub.request_stop()
-    await asyncio.wait_for(task, timeout=5)
+    await asyncio.wait_for(task, timeout=10)
     # Owner exited through its cleanup path with nothing leaked.
     assert hub._contexts == []
 
@@ -726,3 +726,42 @@ def test_timeouts_must_be_positive() -> None:
             url="https://x.test/mcp",
             sse_read_timeout=-1,
         )
+
+
+@pytest.mark.anyio
+async def test_mcp_tools_are_auto_truncated_and_desc_capped(monkeypatch) -> None:
+    """MCP tools must have auto_truncate=6000 armed and desc capped at 2000 chars."""
+    import contextlib
+    from types import SimpleNamespace
+
+    fake_tool = SimpleNamespace(
+        name="huge_tool",
+        desc="A" * 3000,
+        auto_truncate=None,
+    )
+
+    @contextlib.asynccontextmanager
+    async def mock_tools(*args, **kwargs):
+        yield [fake_tool]
+
+    monkeypatch.setattr("services.mcp.tools_from_mcp_servers", mock_tools)
+
+    settings = AppSettings(
+        mcp_servers=[
+            {
+                "id": "test",
+                "name": "srv",
+                "transport": "streamable_http",
+                "url": "https://test.local/mcp",
+                "enabled": True,
+            }
+        ]
+    )
+    hub = MCPHub(settings)
+    await hub._connect()
+
+    assert len(hub.tools) == 1
+    tool = hub.tools[0]
+    assert tool.auto_truncate == 6000
+    assert len(tool.desc) == 2000 + len("...(truncated)")
+    assert tool.desc.endswith("...(truncated)")

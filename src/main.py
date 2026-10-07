@@ -354,6 +354,41 @@ class AppController:
 
         return run
 
+    def _post_to_ui(self, fn: Callable[..., object]) -> Callable[..., None]:
+        """Fire-and-forget marshal to the UI loop (streaming hot path).
+
+        Unlike _run_on_ui, this does NOT call .result(timeout=30) from the
+        calling worker/portal thread. For delta/thought/tool flushes, blocking
+        the portal thread on every chunk waiting for Flet's UI loop to repaint
+        starved the agent of SSE bytes and stalled tool dispatch.
+        """
+        loop = self._ui_loop
+        ctx = self._flet_ctx
+
+        def run(*args: object, **kwargs: object) -> None:
+            call = lambda: fn(*args, **kwargs)  # noqa: E731
+            if loop is None or loop.is_closed():
+                with contextlib.suppress(Exception):
+                    ctx.copy().run(call)
+                return
+            try:
+                on_loop = asyncio.get_running_loop() is loop
+            except RuntimeError:
+                on_loop = False
+            if on_loop:
+                ctx.copy().run(call)
+                return
+
+            async def _call() -> None:
+                try:
+                    ctx.copy().run(call)
+                except Exception as exc:
+                    LOG.debug("post_to_ui exception: %s", exc)
+
+            asyncio.run_coroutine_threadsafe(_call(), loop)
+
+        return run
+
     def _notify_error(self, message: str) -> None:
         """Surface a failure as a scroll-independent SnackBar.
 
@@ -971,7 +1006,7 @@ class AppController:
             kani = agent.ensure_kani(
                 state.model,
                 self._system_prompt(),
-                self._in_flet_ctx(on_thought),
+                self._post_to_ui(on_thought),
                 conv_id=conv,
             )
         except Exception as exc:
@@ -1065,10 +1100,10 @@ class AppController:
         try:
             started = agent.start_turn(
                 text,
-                self._in_flet_ctx(on_delta),
+                self._post_to_ui(on_delta),
                 self._in_flet_ctx(on_done),
                 self._in_flet_ctx(on_error),
-                on_tool=self._in_flet_ctx(on_tool),
+                on_tool=self._post_to_ui(on_tool),
                 on_settled=self._in_flet_ctx(lambda: self._on_turn_settled(conv)),
                 conv_id=conv,
             )

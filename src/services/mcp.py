@@ -659,11 +659,16 @@ class MCPHub:
 
         # Remote servers are untrusted: cap what one can push into EVERY
         # future request (a huge tool description is both a token bomb and a
-        # prompt-injection surface).
+        # prompt-injection surface). Also arm kani's paragraph-aware
+        # auto_truncate: kani's default for MCP tools is None, so returning
+        # 50KB-100KB of search/scrape results persisted verbatim in chat_history
+        # and blew up prompt prefill on every subsequent round.
         for tool in all_tools:
             desc = getattr(tool, "desc", None)
-            if isinstance(desc, str) and len(desc) > 4000:
-                tool.desc = desc[:4000] + "...(truncated)"
+            if isinstance(desc, str) and len(desc) > 2000:
+                tool.desc = desc[:2000] + "...(truncated)"
+            if getattr(tool, "auto_truncate", None) is None:
+                tool.auto_truncate = 6000
         self._contexts = contexts
         self.tools = all_tools
         self.names = all_names
