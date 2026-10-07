@@ -687,8 +687,11 @@ class AgentService:
             on_error("config", "No model selected.")
             return False
 
-        # Pre-flight context budget estimation and safe truncation
-        tools, _ = self._current_tools()
+        # Pre-flight context budget estimation and safe truncation.
+        # Reuse the functions already bound to kani rather than rebuilding
+        # the entire tool registry and querying the hub a second time.
+        kani_funcs = getattr(kani, "functions", None)
+        tools = list(kani_funcs.values()) if kani_funcs else self._current_tools()[0]
         max_ctx = self.settings.max_context_tokens
         completion_reserve = min(8192, max(1024, max_ctx // 10))
         budget_for_prompt = max(1024, max_ctx - completion_reserve)

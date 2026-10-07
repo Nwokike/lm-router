@@ -227,6 +227,14 @@ def prune_conversations(limit: int = MAX_CONVERSATIONS, *, protect: str = "") ->
     never pruned: losing the chat you are in the middle of, or the one
     written a moment ago, is the worst possible outcome here (DDGS port).
     """
+    try:
+        paths = list(storage.conversations_dir().glob("*.json"))
+    except OSError:
+        paths = []
+    # Fast path: below limit, avoid a full list_conversations() pass (stats,
+    # relative date math, title caching) on every single saved turn.
+    if len(paths) <= limit:
+        return 0
     items = list_conversations()
     if len(items) <= limit:
         return 0
