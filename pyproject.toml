@@ -73,6 +73,12 @@ key_alias = "upload"
 [tool.flet.cleanup]
 app = true
 
+# Upstream workaround for Flet <= 1.0.3 until 1.0.4 ships (Flet PR #6920):
+# Flet's template pins jni: 1.0.0, but on 2026-10-06 pub.dev released
+# jni_flutter 1.0.4+1 which enforces package:jni ^1.1.0 via JniVersionCheck.
+[tool.flet.flutter.pubspec.dependency_overrides]
+jni = "^1.1.0"
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
