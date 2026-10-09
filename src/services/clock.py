@@ -1,4 +1,4 @@
-"""Current date and time, for models that otherwise guess.
+"""Current date and time, always delivered — models must never guess "today".
 
 Two delivery routes, because each misses cases the other catches:
 
@@ -8,7 +8,7 @@ Two delivery routes, because each misses cases the other catches:
   day of week) and would rather ask than rely on a prompt line that may be
   stale within a long session.
 
-~15 tokens per turn when enabled, and it is off by default.
+~15 tokens per turn, always on.
 """
 
 from __future__ import annotations
@@ -55,11 +55,12 @@ def strip_clock_line(text: str) -> str:
     return _CLOCK_LINE_RE.sub("", (text or "")).strip()
 
 
-def with_clock(system_prompt: str, enabled: bool) -> str:
-    """Append the clock line to the system prompt when enabled."""
+def with_clock(system_prompt: str) -> str:
+    """Append the current date/time line to the system prompt, always.
+
+    Idempotent: a re-wrap replaces any stale line instead of stacking.
+    """
     base = strip_clock_line(system_prompt)
-    if not enabled:
-        return base
     line = prompt_line()
     return f"{base}\n\n{line}" if base else line
 

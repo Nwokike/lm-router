@@ -210,9 +210,10 @@ class AppSettings(BaseSettings):
     tool_max_rounds: int = Field(default=6, ge=1, le=10)
     # kani's self-correction budget when a tool call is malformed.
     tool_retry_attempts: int = Field(default=1, ge=0, le=5)
-    # Tell the model what time it is. Without this it guesses at "today".
-    # Off by default because it costs ~15 tokens per turn.
-    tell_model_time: bool = False
+    # Legacy switch: the clock line + current_time tool are now always on
+    # (models must never guess "today"). Kept so old saved configs still
+    # validate; ignored everywhere. Remove in a future settings version.
+    tell_model_time: bool = True
     # Inject the built-in router guide into the chat system prompt so the
     # assistant can answer setup/status questions without guessing (R5).
     router_help: bool = True

@@ -1,10 +1,16 @@
-"""Current date/time delivery: system-prompt line plus an on-demand tool."""
+"""Current date/time delivery: system-prompt line plus an on-demand tool.
+
+The clock is ALWAYS on: a model that guesses at "today" is worse than one
+that never sees the date, and ~15 tokens per turn is a price nobody should
+have to discover a toggle to pay.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import re
 
+from core.settings import AppSettings
 from services.clock import build_time_tool, now, prompt_line, with_clock
 
 
@@ -15,23 +21,25 @@ def test_prompt_line_carries_a_real_timestamp() -> None:
     assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", line)
 
 
-def test_clock_is_off_by_default_in_settings() -> None:
-    from core.settings import AppSettings
-
-    assert AppSettings().tell_model_time is False
-
-
-def test_with_clock_is_a_no_op_when_disabled() -> None:
-    assert with_clock("Be brief.", False) == "Be brief."
-    assert with_clock("", False) == ""
+def test_clock_is_always_on_no_settings_toggle() -> None:
+    """No toggle: the legacy field only exists for old saved configs."""
+    settings = AppSettings()
+    assert not hasattr(settings, "tell_model_time") or settings.tell_model_time
 
 
-def test_with_clock_appends_exactly_one_line() -> None:
-    once = with_clock("Be brief.", True)
+def test_with_clock_always_appends() -> None:
+    once = with_clock("Be brief.")
     assert once.startswith("Be brief.")
     assert "Current date and time:" in once
-    # Idempotent: a re-wrap must not stack duplicate clock lines.
-    twice = with_clock(once, True)
+    # Works with an empty prompt too.
+    assert with_clock("").startswith("Current date and time:")
+
+
+def test_with_clock_rewrap_is_idempotent() -> None:
+    once = with_clock("Be brief.")
+    assert once.count("Current date and time:") == 1
+    # A second wrap a moment later must replace, not stack.
+    twice = with_clock(once)
     assert twice.count("Current date and time:") == 1
 
 

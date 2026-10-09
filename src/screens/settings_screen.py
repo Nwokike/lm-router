@@ -443,7 +443,6 @@ def SettingsScreen():
         set_gen_reasoning(fresh.reasoning_effort)
         set_gen_seed("" if fresh.seed is None else str(fresh.seed))
         set_gen_json_mode(fresh.json_mode)
-        set_tell_time(fresh.tell_model_time)
         set_router_help(fresh.router_help)
 
     ft.use_effect(
@@ -486,7 +485,6 @@ def SettingsScreen():
     gen_reasoning, set_gen_reasoning = ft.use_state(settings.reasoning_effort)
     gen_seed, set_gen_seed = ft.use_state("" if settings.seed is None else str(settings.seed))
     gen_json_mode, set_gen_json_mode = ft.use_state(settings.json_mode)
-    tell_time, set_tell_time = ft.use_state(settings.tell_model_time)
     router_help, set_router_help = ft.use_state(settings.router_help)
     m_target, set_m_target = ft.use_state("")
     m_headers, set_m_headers = ft.use_state("")
@@ -586,10 +584,6 @@ def SettingsScreen():
     def _save_prompt(_: object) -> None:
         methods.save_settings({"system_prompt": draft_prompt})
         show_snack(page, "System prompt saved.")
-
-    def _set_tell_time(value: bool) -> None:
-        set_tell_time(value)
-        methods.save_settings({"tell_model_time": value})
 
     def _set_keep_running(value: bool) -> None:
         set_keep_running(value)
@@ -1036,20 +1030,6 @@ def SettingsScreen():
                             spacing=tokens.SPACE_XXS,
                             vertical_alignment=ft.CrossAxisAlignment.CENTER,
                             controls=[
-                                ft.Switch(
-                                    # ~15 tokens/turn. Stops the model guessing at "today".
-                                    value=tell_time,
-                                    active_color=ft.Colors.PRIMARY,
-                                    tooltip="Tell time",
-                                    on_change=lambda e: _set_tell_time(bool(e.control.value)),
-                                ),
-                                ft.Text("Tell time", size=tokens.FONT_SM),
-                            ],
-                        ),
-                        ft.Row(
-                            spacing=tokens.SPACE_XXS,
-                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                            controls=[
                                 # Deferred like every other knob on this card:
                                 # persisted by Save below, not on toggle.
                                 ft.Switch(
@@ -1331,29 +1311,6 @@ def SettingsScreen():
                             if page
                             else set_mcp_open(True)
                         ),
-                    ),
-                ],
-            ),
-        ),
-        # The cap the model feels: every enabled tool's schema rides along on
-        # each round, so show the budget where users flip tools on and off.
-        _pad(
-            ft.Row(
-                spacing=tokens.SPACE_XS,
-                controls=[
-                    ft.Text(
-                        f"{len(state.mcp_tools)} / {state.mcp_tool_limit} tools"
-                        if state.mcp_tool_limit
-                        else f"{len(state.mcp_tools)} tools",
-                        size=tokens.FONT_SM,
-                        weight=ft.FontWeight.W_600,
-                    ),
-                    ft.Text(
-                        "limit reached: disable one to enable another"
-                        if state.mcp_tool_limit and len(state.mcp_tools) >= state.mcp_tool_limit
-                        else "enabled",
-                        size=tokens.FONT_XS,
-                        color=theme.dim(is_dark),
                     ),
                 ],
             ),

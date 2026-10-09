@@ -1057,4 +1057,4 @@ def test_router_guide_and_tools_wire_into_the_agent(boot_page) -> None:
     tools, generation = controller._extra_tools()
     names = {getattr(tool, "name", "") for tool in tools}
     assert {"gateway_status", "list_models", "test_model", "shell", "read"} <= names, names
-    assert "router4" in str(generation), "tool set change must bump the generation"
+    assert "router5" in str(generation), "tool set change must bump the generation"

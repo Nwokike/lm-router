@@ -95,10 +95,10 @@ def test_rate_advice_no_double_period() -> None:
 def test_clock_rewrap_idempotent() -> None:
     from services.clock import with_clock
 
-    once = with_clock("Be brief.", True)
+    once = with_clock("Be brief.")
     assert once.count("Current date and time:") == 1
     # A second wrap a moment later must replace, not stack.
-    twice = with_clock(once, True)
+    twice = with_clock(once)
     assert twice.count("Current date and time:") == 1
 
 

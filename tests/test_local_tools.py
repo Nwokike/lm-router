@@ -82,4 +82,4 @@ def test_desktop_registers_shell_and_read(boot_page) -> None:
     tools, generation = controller._extra_tools()
     names = {getattr(tool, "name", "") for tool in tools}
     assert {"shell", "read"} <= names, names
-    assert "router4" in str(generation)
+    assert "router5" in str(generation)

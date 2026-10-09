@@ -68,9 +68,6 @@ class AppState:
         self.conversations: list[dict] = []
         self.active_conversation: str = ""
         self.mcp_tools: list[str] = []
-        # The budget the UI counts against (MAX_AGENT_TOOLS minus built-ins);
-        # 0 = unknown until the hub reports.
-        self.mcp_tool_limit: int = 0
         self.mcp_test_results: dict = {}
         self.model_test_results: dict = {}
         # Per-model rate-limit hints from GET /account-limits, keyed by model

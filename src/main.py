@@ -1460,19 +1460,11 @@ class AppController:
 
     def _extra_tools(self) -> tuple[list, object]:
         """(tools, generation) for AgentService; rebuilds kani on change."""
-        tools: list = []
-        if self.settings.tell_model_time:
-            # Pair with the system-prompt clock line: the line handles routine
-            # "what's today" questions, the tool covers exact readings.
-            tools.append(self._time_tool)
+        tools: list = [self._time_tool]
         # Search is MCP-only now (Exa + Parallel builtins): no hand-rolled
         # web_search tool, no direct-HTTP fallbacks. The model picks a
-        # vendor tool when research is needed. Defensive cap: even if
-        # settings and the hub disagree, kani never sees more than
-        # MAX_AGENT_TOOLS in total.
-        after_mcp = 3 + (0 if self._is_mobile else 2)  # router tools + shell/read
-        mcp_budget = max(0, constants.MAX_AGENT_TOOLS - len(tools) - after_mcp)
-        tools.extend(self.services.mcp.tools[:mcp_budget])
+        # vendor tool when research is needed.
+        tools.extend(self.services.mcp.tools)
         tools.extend(
             (
                 self._router_status_tool,
@@ -1484,31 +1476,15 @@ class AppController:
             # Desktop-only: phones have no shell and no shared filesystem
             # worth reading (same gate as stdio MCP).
             tools.extend((self._shell_tool, self._read_tool))
-        return tools, (f"{self.services.mcp.generation}:{self.settings.tell_model_time}:router4")
-
-    def _builtin_tool_count(self) -> int:
-        count = 3  # router status/models/probe
-        if not self._is_mobile:
-            count += 2  # shell + read
-        if self.settings.tell_model_time:
-            count += 1  # current_time
-        return count
-
-    def _tool_count(self) -> int:
-        """Everything the model currently sees (built-ins + enabled MCP)."""
-        return self._builtin_tool_count() + len(self.services.mcp.tools)
-
-    def _mcp_tool_budget(self) -> int:
-        """How many MCP tools may be enabled at once."""
-        return max(0, constants.MAX_AGENT_TOOLS - self._builtin_tool_count())
+        return tools, (f"{self.services.mcp.generation}:router5")
 
     def _system_prompt(self) -> str:
-        """The built-in router guide (when enabled), the stored prompt, plus
-        a clock line when the user opted in."""
+        """The built-in router guide (when enabled), plus the always-on
+        current date/time line."""
         base = self.settings.system_prompt
         if self.settings.router_help:
             base = f"{ROUTER_GUIDE}\n\n{base}" if base.strip() else ROUTER_GUIDE
-        return with_clock(base, self.settings.tell_model_time)
+        return with_clock(base)
 
     def _ensure_mcp_owner(self) -> None:
         """Spawn the MCP owner on the APP's own event loop.
@@ -1569,8 +1545,6 @@ class AppController:
 
         def _apply() -> None:
             state.mcp_tools = names or []
-            # The counter the Settings UI renders against.
-            state.mcp_tool_limit = self._mcp_tool_budget()
             # Every _connect path ends in _status, so clearing here covers
             # all ends (success, partial, failure, empty config).
             state.mcp_connecting = False
@@ -1578,10 +1552,6 @@ class AppController:
                 LOG.info("mcp tools active: %d", len(names))
             if error:
                 self._notify_error(error)
-            # A connect that lands over the cap (a newly-enabled server) gets
-            # its overflow auto-disabled here; the reconnect it triggers
-            # re-emits a status inside the budget.
-            self._enforce_tool_cap(names or [])
 
         self._run_on_ui(_apply)()
 
@@ -1647,15 +1617,6 @@ class AppController:
         for server in self.settings.mcp_servers:
             if server.id == server_id:
                 if tool_name in server.disabled_tools:
-                    # Enabling: respect the global tool cap (swap to enable).
-                    # The bump below still runs so the Switch visual reverts.
-                    if self._tool_count() >= constants.MAX_AGENT_TOOLS:
-                        limit = constants.MAX_AGENT_TOOLS
-                        self._notify_info(
-                            f"Tool limit reached ({limit}/{limit}). Disable another tool first."
-                        )
-                        state.settings_version += 1
-                        return
                     server.disabled_tools.remove(tool_name)
                 else:
                     server.disabled_tools.append(tool_name)
@@ -1665,43 +1626,6 @@ class AppController:
         # a tab switch remounted the screen.
         state.settings_version += 1
         self._reapply_mcp()
-
-    def _enforce_tool_cap(self, names: list[str]) -> None:
-        """Auto-disable MCP tools past the cap (oldest enabled servers win).
-
-        A single server enable can add dozens of tools at once, and a
-        server's real tool list is only known AFTER it connects — so the cap
-        is enforced here, on the connect result: overflow names are persisted
-        into each server's disabled_tools and a reconnect applies them. The
-        second pass is stable because the overflow is now disabled.
-        """
-        budget = self._mcp_tool_budget()
-        if len(names) <= budget:
-            return
-        changed = 0
-        remaining = budget
-        for server in self.settings.mcp_servers:
-            if not server.enabled:
-                continue
-            prefix = f"{server.name}."
-            server_tools = [n for n in names if n.startswith(prefix)]
-            keep, overflow = server_tools[:remaining], server_tools[remaining:]
-            remaining -= len(keep)
-            for qualified in overflow:
-                base = qualified[len(prefix) :]
-                if base not in server.disabled_tools:
-                    server.disabled_tools.append(base)
-                    changed += 1
-        if not changed:
-            return
-        self.settings.save()
-        state.settings_version += 1
-        self._reapply_mcp()
-        self._notify_info(
-            f"Tool limit reached ({constants.MAX_AGENT_TOOLS}). "
-            f"{changed} tool(s) were disabled. Free space and re-enable them."
-        )
-        LOG.warning("tool cap enforced: disabled %d tools", changed)
 
     def _test_mcp_server(self, server_id: str, done_cb) -> None:
         hub = self.services.mcp
@@ -1787,7 +1711,6 @@ class AppController:
             "json_mode",
             "tool_max_rounds",
             "tool_retry_attempts",
-            "tell_model_time",
             "router_help",
         }
         updates = {k: v for k, v in data.items() if k in allowed}
