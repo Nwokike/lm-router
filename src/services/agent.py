@@ -39,6 +39,7 @@ from services.reasoning import (
     build_thought_client,
 )
 from services.tokenizer import (
+    _reset_history_token_cache,
     count_tokens,
     estimate_turn_tokens,
     tokenizer_or_heuristic,
@@ -57,11 +58,14 @@ ExtraTools = Callable[[], tuple[list, object]]
 # dispatch sites below replace it with the real task handle.
 _TURN_RESERVED: Any = object()
 
-# Absolute ceiling on one model round's `manager.message()` wait. A hung TOOL
-# never reaches this (GuardedKani converts it to an error result at 30s); this
-# catches a wedged round itself. Aligned with the UI watchdog in main.py — the
-# old 60s value killed whole turns for legitimately slow tool batches.
-TURN_CEILING_S = 180.0
+# LAST-RESORT ceiling on one model round's `manager.message()` wait.
+# Normal waits are already bounded: a hung tool becomes an error result at
+# 30s (GuardedKani, in parallel) and the SSE stream is bounded by the httpx
+# read timeout, so this only fires for a genuinely wedged round. It was 180s,
+# which the owner experienced as "everything cancels at 3 minutes" — raised
+# to 240s to match DDGS's AGENT_TIMEOUT_S and stop guillotining slow free
+# models and legitimate multi-tool research chains.
+TURN_CEILING_S = 240.0
 
 
 @dataclass
@@ -734,6 +738,10 @@ class AgentService:
             trimmed = _drop_orphan_function_messages(trimmed)
             kani.chat_history.clear()
             kani.chat_history.extend(trimmed)
+            # Dropped messages can be GC'd and their ids recycled: forget the
+            # cached per-message counts so a new message at a recycled address
+            # can never inherit the old one's token count.
+            _reset_history_token_cache()
             LOG.info("trimmed %d messages from chat history", dropped)
 
         # Transcript guard: an assistant turn that claimed tool calls but has
@@ -743,6 +751,11 @@ class AgentService:
         # the hang the owner reported: no error row, spinner, and pressing
         # Test in Settings unblocked it (portal activity let the wedged turn
         # time out). Evict the dangling assistant claim before sending.
+        #
+        # One cheap pass first: the guard only has work to do when the
+        # history actually ends in an unanswered tool claim (a turn that died
+        # mid-batch). A normal send pays one O(N) scan with tiktoken encodes,
+        # not four full rebuilds.
         pending = _pending_tool_call_ids(kani.chat_history)
         if pending:
             LOG.warning(
@@ -758,6 +771,7 @@ class AgentService:
             cleaned = _drop_orphan_function_messages(cleaned)
             kani.chat_history.clear()
             kani.chat_history.extend(cleaned)
+            _reset_history_token_cache()
 
         def _safe_callback(label: str, fn: Callable[[], None]) -> None:
             # A UI callback raising mid-turn used to abort the async-for and

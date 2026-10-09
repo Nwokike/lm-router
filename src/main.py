@@ -857,7 +857,7 @@ class AppController:
             # The Timer already waited 180s before invoking this.
             if watchdog_gen != self._turn_gen or not state.busy:
                 return
-            LOG.error("turn watchdog fired after 180s with no settlement; freeing busy")
+            LOG.error("turn watchdog fired after 240s with no settlement; freeing busy")
 
             def _apply() -> None:
                 if conv == state.active_conversation:
@@ -866,7 +866,7 @@ class AppController:
                     {
                         "role": "error",
                         "content": (
-                            "The request took too long with no reply (3 minutes). "
+                            "The request took too long with no reply (4 minutes). "
                             "The turn was stopped. Try again, or disable slow "
                             "tools in Settings."
                         ),
@@ -877,11 +877,13 @@ class AppController:
             self._in_flet_ctx(_apply)()
 
         # A plain Thread parked in sleep(180) leaked one sleeper per send; a
-        # cancellable Timer is retired the moment the turn settles.
+        # cancellable Timer is retired the moment the turn settles. 240s, not
+        # 180: the old value plus TURN_CEILING_S=180 made 3 minutes a hard kill
+        # for slow free models (the owner's "everything cancels" report).
         prior = getattr(self, "_turn_timer", None)
         if prior is not None:
             prior.cancel()
-        self._turn_timer = threading.Timer(180.0, _watchdog)
+        self._turn_timer = threading.Timer(240.0, _watchdog)
         self._turn_timer.daemon = True
         self._turn_timer.start()
         self._stop_requested = False
@@ -1487,39 +1489,30 @@ class AppController:
         return with_clock(base)
 
     def _ensure_mcp_owner(self) -> None:
-        """Spawn the MCP owner on the APP's own event loop.
+        """Spawn the MCP owner on the AGENT PORTAL — where tools are called.
 
-        It used to be portal-spawned (agent.spawn runs inside the agent
-        portal's anyio task group), which meant ANY escaped owner failure
-        — most importantly the cross-task cancel-scope brick from a
-        cancelled stdio connect — took the whole portal down: chat, the
-        model catalog and every agent call died with it (owner device
-        log,2026-09-27). A plain loop task can only ever hurt itself, and
-        serve() carries its own shields.
+        The owner used to run on the Flet UI loop, but kani executes tool
+        bodies on the portal loop: sessions were entered on one loop and
+        invoked from another, so every tool round paid cross-loop marshaling
+        through anyio memory streams owned by a foreign loop. That is exactly
+        the "tools are very slow" latency (audit: DDGS runs tools same-loop).
+
+        serve() carries its own shields — same-task connect timeouts, no
+        wait_for around SDK scopes, foreign-cancel absorption — so an escaped
+        owner failure no longer takes the portal down (tests/test_agent_service
+        .py::test_failed_mcp_connect_does_not_poison_the_agent spawns the owner
+        on the portal and asserts the portal still dispatches). A portal
+        restart respawns the owner via on_portal_restart, so MCP survives.
 
         Idempotent; called at boot, from every MCP settings mutation (via
-        _reapply_mcp) and after portal restarts (owner is loop-bound now,
-        so a portal restart never needs a respawn).
+        _reapply_mcp) and after portal restarts.
         """
         future = self._mcp_future
         if future is not None and not future.done():
             return
-        loop = self._ui_loop
         try:
-            if loop is not None and not loop.is_closed():
-                # Thread-safe scheduling from ANY caller: run_coroutine_
-                # threadsafe marshals onto the loop whether we are on it or
-                # on a foreign thread (notably the agent-portal restart
-                # callback) — loop.create_task from a foreign thread is
-                # undefined behaviour. The returned future completes with
-                # the owner task, so existing join logic is unaffected.
-                self._mcp_future = asyncio.run_coroutine_threadsafe(self.services.mcp.serve(), loop)
-                state.mcp_connecting = True
-            else:
-                # Pre-loop fallback; portal-bound again, but serve() is
-                # shielded (park-loop catches) so the portal stays up.
-                self._mcp_future = self.services.agent.spawn(self.services.mcp.serve)
-                state.mcp_connecting = True
+            self._mcp_future = self.services.agent.spawn(self.services.mcp.serve)
+            state.mcp_connecting = True
         except Exception as exc:
             name = str(exc) or type(exc).__name__
             LOG.warning("mcp owner task not started: %s", name)
@@ -1638,7 +1631,8 @@ class AppController:
             async def probe() -> list:
                 # Bounded: MCP's own read timeout is 300s — a stalled server
                 # must never look like a dead button (settings audit: 75s+
-                # hangs with no done_cb). 20s cap on the owner loop.
+                # hangs with no done_cb). hub.test() bounds each transport
+                # attempt itself; this caps the whole probe.
                 return await asyncio.wait_for(hub.test_on_owner(target), timeout=20.0)
 
             def deliver(result: tuple) -> None:
@@ -1646,16 +1640,13 @@ class AppController:
                 # the spinner can stick forever (forensics R5).
                 self._in_flet_ctx(done_cb)(result)
 
-            # Owner loop, NOT agent.call: the probe runs its own SDK task
-            # group, and on the agent portal it contends with the live turn's
-            # group — empirically, pressing Test unblocked hung turns, which
-            # is cross-task interference, not a fix. run_coroutine_threadsafe
-            # also never raises "portal is not running" into a restart storm.
-            loop = self._ui_loop
+            # The probe runs on the AGENT PORTAL — the loop that owns the
+            # live MCP sessions — so it shares the turn's task group instead
+            # of perturbing it from outside (the old UI-loop probe
+            # empirically "unblocked" hung turns, which was cross-task
+            # interference, not a fix).
             try:
-                if loop is None or loop.is_closed():
-                    raise RuntimeError("UI loop unavailable for MCP test.")
-                names = asyncio.run_coroutine_threadsafe(probe(), loop).result(timeout=25)
+                names = self.services.agent.call(probe)
             except TimeoutError:
                 deliver(("err", "Timed out after 20s. Check the URL or command."))
                 return

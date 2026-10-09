@@ -636,56 +636,42 @@ def test_mcp_mutators_bump_the_settings_snapshot(boot_page) -> None:
     assert [s.name for s in controller.settings.mcp_servers] == ["Exa", "Parallel"]
 
 
-def test_mcp_owner_ui_loop_spawn_receives_a_coroutine(boot_page) -> None:
-    """Owner device regression (2026-09-27): the loop branch passed the
-    BOUND METHOD serve to create_task (anyio's start_task_soon used to
-    call it for us), so on a real device the owner never started and MCP
-    was dead: 'a coroutine was expected'. Boot tests run without a loop
-    and only exercise the portal fallback, which is why the gate was
-    green — this pins the loop branch itself."""
-    import asyncio as aio
+def test_mcp_owner_spawns_on_the_agent_portal(boot_page) -> None:
+    """The MCP owner must run on the AGENT PORTAL, not the Flet UI loop.
 
+    kani invokes tool bodies on the portal loop. While serve() ran on the UI
+    loop, sessions were entered on one loop and called from another, so every
+    tool round paid cross-loop marshaling through anyio memory streams owned
+    by a foreign loop — the "tools are very slow" latency (DDGS runs tools
+    same-loop). agent.spawn puts enter and call on the same loop; the poison
+    test (test_agent_service.py) covers the failure mode that once made this
+    portal-spawned.
+    """
     from main import AppController
 
     controller = AppController(boot_page)
     controller.init()
     boot_page.drain()
 
-    created: list = []
+    spawned: list = []
 
-    class _FakeTask:
-        def done(self) -> bool:
-            return False
+    def _fake_spawn(fn, *args, **kwargs):
+        spawned.append(fn)
+        return None
 
-    class _FakeLoop:
-        def is_closed(self) -> bool:
-            return False
-
-        def call_soon_threadsafe(self, callback, *args):
-            # run_coroutine_threadsafe schedules the coroutine's __step via
-            # this hook: invoking the callback runs one event-loop tick.
-            created.append((callback, args))
-            callback(*args)
-            return _FakeTask()
-
-    real_run = aio.run_coroutine_threadsafe
-
-    def _spy_run(coro, loop, *args, **kwargs):
-        assert aio.iscoroutine(coro), f"owner got {type(coro)!r}, want a coroutine"
-        created.append(coro)
-        return real_run(coro, aio.new_event_loop(), *args, **kwargs)
-
-    controller._ui_loop = _FakeLoop()
+    agent = controller.services.agent
+    real_spawn = agent.spawn
+    agent.spawn = _fake_spawn
     controller._mcp_future = None
-    import unittest.mock as mock
-
-    with mock.patch.object(aio, "run_coroutine_threadsafe", _spy_run):
+    try:
         controller._ensure_mcp_owner()
-    coros = [c for c in created if aio.iscoroutine(c)]
-    assert coros, "owner coroutine never scheduled"
-    for c in coros:
-        c.close()  # never awaited; close to avoid a pending-coroutine warning
-    assert controller._mcp_future is not None
+    finally:
+        agent.spawn = real_spawn
+
+    assert spawned, "MCP owner was not spawned through agent.spawn (portal)"
+    # Bound methods compare equal by __self__/__func__ (each access makes a
+    # new bound-method object, so `is` would always fail).
+    assert spawned[0] == controller.services.mcp.serve
 
 
 def test_add_mcp_server_reports_rejection_instead_of_implied_success(boot_page) -> None:

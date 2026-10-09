@@ -182,6 +182,37 @@ def _extract_role(message: Any) -> str:
     return "user"
 
 
+# Per-message token counts, keyed by (id(msg), len(extracted text)). Messages
+# are immutable once appended to a kani history, so a send that re-walks an
+# unchanged prefix costs ZERO tiktoken encodes instead of one per message.
+# The id() can be recycled after a message is dropped, which only ever happens
+# after a history mutation (trim/clear) — those paths clear the cache.
+_HISTORY_TOKEN_CACHE: dict[tuple[int, int], int] = {}
+
+_HISTORY_TOKEN_CACHE_MAX = 4096
+
+
+def _cached_msg_tokens(msg: Any, encoding: Any) -> int:
+    text = _extract_text(msg)
+    # role joins the key: a recycled id (message dropped, new one allocated at
+    # the same address) with the same text length but a different role would
+    # otherwise return another message's count.
+    role = str(getattr(msg, "role", "")).lower()
+    key = (id(msg), len(text), len(role))
+    hit = _HISTORY_TOKEN_CACHE.get(key)
+    if hit is None:
+        hit = count_tokens(text, encoding)
+        if len(_HISTORY_TOKEN_CACHE) >= _HISTORY_TOKEN_CACHE_MAX:
+            _HISTORY_TOKEN_CACHE.clear()
+        _HISTORY_TOKEN_CACHE[key] = hit
+    return hit
+
+
+def _reset_history_token_cache() -> None:
+    """Drop cached per-message counts (call after mutating a history)."""
+    _HISTORY_TOKEN_CACHE.clear()
+
+
 def estimate_turn_tokens(
     system_prompt: str,
     chat_history: list[Any],
@@ -201,8 +232,7 @@ def estimate_turn_tokens(
         total += count_tokens(system_prompt, encoding) + 4
 
     for msg in chat_history:
-        text = _extract_text(msg)
-        total += count_tokens(text, encoding) + 4
+        total += _cached_msg_tokens(msg, encoding) + 4
 
     if user_prompt:
         total += count_tokens(user_prompt, encoding) + 4
