@@ -401,6 +401,41 @@ def test_view_pop_navigates_and_root_never_quits(boot_page, monkeypatch) -> None
     assert quits == [], "system back at the root must not quit the app"
 
 
+def test_every_quit_entry_point_asks_first(boot_page) -> None:
+    """Every exit must confirm: quitting ends the gateway and drops anything
+    talking to it (the shared URL included). That covers the window X, the
+    console close, the header power button and the Server/Settings Quit buttons
+    — which are methods.quit_app, so the method ITSELF must be the confirm.
+    Pressing any of them used to call _quit_app directly and quit with no ask.
+    """
+    from main import AppController
+
+    controller = AppController(boot_page)
+    controller.init()
+    boot_page.drain()
+
+    # The single method every screen calls is the confirm, not the teardown.
+    assert controller.methods.quit_app == controller._confirm_quit
+
+    shown: list = []
+    original_show = boot_page.show_dialog
+    boot_page.show_dialog = lambda dialog: (shown.append(dialog), original_show(dialog))
+    try:
+        controller.methods.quit_app()
+    finally:
+        boot_page.show_dialog = original_show
+    assert shown, "methods.quit_app must raise the confirm dialog"
+    assert any("Quit" in t for t in _dialog_texts(shown[0])), (
+        "the dialog must be a Quit confirmation"
+    )
+
+    # And the confirmed action still tears down for real.
+    quits: list[int] = []
+    controller._quit_app = lambda: quits.append(1)  # type: ignore[method-assign]
+    controller._quit_confirmed()
+    assert quits == [1]
+
+
 def test_x_button_asks_before_quitting(boot_page) -> None:
     """The X button must confirm, and say what quitting costs: the gateway
     stops and anything talking to it (including the shared URL) disconnects."""

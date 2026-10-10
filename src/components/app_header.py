@@ -131,8 +131,10 @@ def AppHeader(
         ),
     )
     if show_quit:
-        # Always-present escape hatch: without it, "keep running when closed"
-        # means the app looks like it refuses to quit.
+        # Always-present escape hatch: without it, an app with no tray entry
+        # looks like it refuses to quit. Quitting ends the gateway, so every
+        # exit goes through the controller's confirm dialog (methods.quit_app
+        # IS the confirm; _quit_app is the confirmed action).
         right.append(
             ft.IconButton(
                 icon=ft.Icons.POWER_SETTINGS_NEW_ROUNDED,

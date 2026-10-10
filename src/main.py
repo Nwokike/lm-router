@@ -253,7 +253,7 @@ class AppController:
         m.test_model = self._test_model
         m.retest_models = self._retest_models
         m.stop_retest = self._stop_retest
-        m.quit_app = self._quit_app
+        m.quit_app = self._confirm_quit
         m.send_message = self._send_message
         m.regenerate_last = self._regenerate_last
         m.edit_last_user = self._edit_last_user
@@ -1704,17 +1704,30 @@ class AppController:
             return
 
         def work() -> None:
+            def deliver(result: tuple) -> None:
+                # done() writes observables — must run in the Flet context or
+                # the spinner can stick forever (forensics R5).
+                self._in_flet_ctx(done_cb)(result)
+
+            # An add/toggle just asked the owner to reconnect, which takes time
+            # (sequential handshakes, up to 20s each). Probing while the owner
+            # is mid-reconnect collides with its own SDK task group: the probe
+            # dies with a bare cancel ("mcp test failed: " — empty message) and
+            # the spinner just stops. Wait for the owner to settle first, then
+            # probe (same thing pressing Test by hand a moment later does).
+            deadline = time.monotonic() + 30.0
+            while state.mcp_connecting and time.monotonic() < deadline:
+                time.sleep(0.25)
+            if state.mcp_connecting:
+                deliver(("err", "Still connecting servers. Try Test again in a moment."))
+                return
+
             async def probe() -> list:
                 # Bounded: MCP's own read timeout is 300s — a stalled server
                 # must never look like a dead button (settings audit: 75s+
                 # hangs with no done_cb). hub.test() bounds each transport
                 # attempt itself; this caps the whole probe.
                 return await asyncio.wait_for(hub.test_on_owner(target), timeout=20.0)
-
-            def deliver(result: tuple) -> None:
-                # done() writes observables — must run in the Flet context or
-                # the spinner can stick forever (forensics R5).
-                self._in_flet_ctx(done_cb)(result)
 
             # The probe runs its own SDK task group. It goes on the loop that
             # owns the sessions (the Flet UI loop for the owner): running it on
