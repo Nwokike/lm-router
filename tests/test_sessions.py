@@ -199,6 +199,53 @@ def test_session_busy_flag_drives_the_view(monkeypatch) -> None:
         agent.stop()
 
 
+def test_new_and_opened_conversations_share_the_observable_list(boot_page) -> None:
+    """flet only repaints on mutations of the OBSERVABLE list.
+
+    `state.messages` is wrapped into an ObservableList on assignment, and the
+    UI subscribes to that wrapper. Storing the pre-wrap list in _conv_messages
+    leaves the streaming worker writing a list nobody watches: content lands
+    but the view never repaints until some other observable is assigned —
+    the owner's "I send in a new chat while one is running and only see the
+    spinner, then I switch tabs and it's done". The map must hold exactly the
+    object the view renders.
+    """
+    from main import AppController
+
+    controller = AppController(boot_page)
+    controller.init()
+    boot_page.drain()
+
+    # New chat.
+    controller.methods.new_conversation()
+    cid = state.active_conversation
+    assert controller._conv_messages[cid] is state.messages, (
+        "new conversation: map holds the raw list, the view holds the wrapper"
+    )
+
+    # Messages written through the map's list MUST notify the observable.
+    # (Observable.__listeners is a WeakSet: keep a strong ref or the listener
+    # is collected before the mutation.)
+    events: list = []
+    listener = lambda _sender, _field: events.append(_field)  # noqa: E731
+    keep_alive: list = [listener]  # Observable listeners live in a WeakSet
+    state.subscribe(keep_alive[0])
+    controller._conv_messages[cid].append({"role": "user", "content": "hi"})
+    assert keep_alive, "test bookkeeping"
+    assert events, "appending to a conversation's list produced no repaint event"
+    assert state.messages[-1]["content"] == "hi"
+    # item assignment (what flush() does) must notify too
+    controller._conv_messages[cid].append({"role": "assistant", "content": "partial"})
+    controller._conv_messages[cid][-1] = {"role": "assistant", "content": "more"}
+    assert len(events) >= 3, events
+
+    # Opened conversation: a fresh list handed over by _conversation_loaded.
+    controller._conversation_loaded(True, "opened123456", [{"role": "user", "content": "old"}])
+    assert controller._conv_messages["opened123456"] is state.messages, (
+        "opened conversation: map holds the raw list, the view holds the wrapper"
+    )
+
+
 def test_turn_settle_time_is_bounded(monkeypatch) -> None:
     """Sanity: a full session turn settles well under the ceiling constant."""
     agent = _agent(monkeypatch, _sse_handler)

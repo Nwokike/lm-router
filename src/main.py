@@ -265,6 +265,7 @@ class AppController:
         m.toggle_mcp_server = self._toggle_mcp_server
         m.toggle_mcp_tool = self._toggle_mcp_tool
         m.test_mcp_server = self._test_mcp_server
+        m.mcp_server_id_by_name = self._mcp_server_id_by_name
         m.save_settings = self._save_settings
         m.add_provider = self._add_provider
         m.remove_provider = self._remove_provider
@@ -743,18 +744,33 @@ class AppController:
         # running on ITS session and saves to ITS file when it finishes. There
         # is nothing here a switch could corrupt, so no "stop first" gate.
         cid = history.start_conversation()
-        self._conv_messages[cid] = []
         self.services.agent.active_conv = cid
-        state.messages = self._conv_messages[cid]
+        self._show_conversation(cid, [])
         state.busy = False
         state.context_used_tokens = 0
         self._prune_idle_sessions(cid)
+
+    def _show_conversation(self, conversation_id: str, messages: list | None = None) -> None:
+        """Point the view at a conversation's list AND keep the map in step.
+
+        flet's Observable wraps a list field into an ObservableList on
+        ASSIGNMENT, and components only repaint on mutations of that wrapper.
+        Storing the pre-wrap list in _conv_messages leaves the streaming
+        worker writing a list nobody is subscribed to: content lands but the
+        view never repaints until something else assigns an observable — the
+        owner's "I send in a new chat while one is running, I only see the
+        spinner, then I switch tabs and it's done". So state.messages (the
+        wrapper) is the canonical object and the map holds exactly that.
+        """
+        self._conv_messages[conversation_id] = messages if messages is not None else []
+        state.messages = self._conv_messages[conversation_id]
+        self._conv_messages[conversation_id] = state.messages
 
     def _activate_conversation(self, conversation_id: str) -> None:
         """Point the UI at a conversation's own message list."""
         self.services.agent.active_conv = conversation_id
         state.active_conversation = conversation_id
-        state.messages = self._conv_messages.setdefault(conversation_id, [])
+        self._show_conversation(conversation_id, self._conv_messages.get(conversation_id, []))
         state.busy = self.services.agent.session_busy(conversation_id)
 
     def _prune_idle_sessions(self, keep: str) -> None:
@@ -919,7 +935,9 @@ class AppController:
         if idx < 0:
             return ""
         text = str(msgs[idx].get("content") or "")
-        state.messages = msgs[:idx]
+        # _show_conversation re-points the map at the NEW wrapper so the
+        # streaming worker that follows writes a list the view renders.
+        self._show_conversation(state.active_conversation, msgs[:idx])
         agent = self.services.agent
         history = agent.kani.chat_history if agent.kani is not None else None
         if history is not None:
@@ -1489,30 +1507,42 @@ class AppController:
         return with_clock(base)
 
     def _ensure_mcp_owner(self) -> None:
-        """Spawn the MCP owner on the AGENT PORTAL — where tools are called.
+        """Spawn the MCP owner on the APP's own event loop.
 
-        The owner used to run on the Flet UI loop, but kani executes tool
-        bodies on the portal loop: sessions were entered on one loop and
-        invoked from another, so every tool round paid cross-loop marshaling
-        through anyio memory streams owned by a foreign loop. That is exactly
-        the "tools are very slow" latency (audit: DDGS runs tools same-loop).
-
-        serve() carries its own shields — same-task connect timeouts, no
-        wait_for around SDK scopes, foreign-cancel absorption — so an escaped
-        owner failure no longer takes the portal down (tests/test_agent_service
-        .py::test_failed_mcp_connect_does_not_poison_the_agent spawns the owner
-        on the portal and asserts the portal still dispatches). A portal
-        restart respawns the owner via on_portal_restart, so MCP survives.
+        Portal-spawn was tried (2026-10-09, "tools are same-loop") and
+        REVERTED on owner-device evidence: the owner's DISCONNECT path exited
+        an SDK cancel scope from the wrong task ("Attempted to exit a cancel
+        scope that isn't the current tasks's current cancel scope"), the
+        portal's task group unwound, every later send died with "This portal
+        is not running", and all MCP tools returned `None (error)` until the
+        portal restarted. serve()'s shields cover the CONNECT path only —
+        the poison test (test_failed_mcp_connect_does_not_poison_the_agent)
+        never exercises close, so CI stayed green while the app bricked.
+        A plain loop task can only ever hurt itself.
 
         Idempotent; called at boot, from every MCP settings mutation (via
-        _reapply_mcp) and after portal restarts.
+        _reapply_mcp) and after portal restarts (owner is loop-bound now,
+        so a portal restart never needs a respawn).
         """
         future = self._mcp_future
         if future is not None and not future.done():
             return
+        loop = self._ui_loop
         try:
-            self._mcp_future = self.services.agent.spawn(self.services.mcp.serve)
-            state.mcp_connecting = True
+            if loop is not None and not loop.is_closed():
+                # Thread-safe scheduling from ANY caller: run_coroutine_
+                # threadsafe marshals onto the loop whether we are on it or
+                # on a foreign thread (notably the agent-portal restart
+                # callback) — loop.create_task from a foreign thread is
+                # undefined behaviour. The returned future completes with
+                # the owner task, so existing join logic is unaffected.
+                self._mcp_future = asyncio.run_coroutine_threadsafe(self.services.mcp.serve(), loop)
+                state.mcp_connecting = True
+            else:
+                # Pre-loop fallback; portal-bound again, but serve() is
+                # shielded (park-loop catches) so the portal stays up.
+                self._mcp_future = self.services.agent.spawn(self.services.mcp.serve)
+                state.mcp_connecting = True
         except Exception as exc:
             name = str(exc) or type(exc).__name__
             LOG.warning("mcp owner task not started: %s", name)
@@ -1620,6 +1650,19 @@ class AppController:
         state.settings_version += 1
         self._reapply_mcp()
 
+    def _mcp_server_id_by_name(self, name: str) -> str:
+        """The id of the enabled server carrying this configured name, or "".
+
+        The Settings screen needs the live id right after an add: its own
+        settings snapshot reloads on the next render, so it cannot find the
+        new server itself (and auto-Test would silently no-op).
+        """
+        wanted = str(name or "").strip()
+        for server in self.settings.mcp_servers:
+            if server.name == wanted:
+                return server.id
+        return ""
+
     def _test_mcp_server(self, server_id: str, done_cb) -> None:
         hub = self.services.mcp
         target = next((s for s in self.settings.mcp_servers if s.id == server_id), None)
@@ -1640,13 +1683,16 @@ class AppController:
                 # the spinner can stick forever (forensics R5).
                 self._in_flet_ctx(done_cb)(result)
 
-            # The probe runs on the AGENT PORTAL — the loop that owns the
-            # live MCP sessions — so it shares the turn's task group instead
-            # of perturbing it from outside (the old UI-loop probe
-            # empirically "unblocked" hung turns, which was cross-task
-            # interference, not a fix).
+            # The probe runs its own SDK task group. It goes on the loop that
+            # owns the sessions (the Flet UI loop for the owner): running it on
+            # the agent portal contends with the live turn's group —
+            # empirically, pressing Test unblocked hung turns, which is
+            # cross-task interference, not a fix.
+            loop = self._ui_loop
             try:
-                names = self.services.agent.call(probe)
+                if loop is None or loop.is_closed():
+                    raise RuntimeError("UI loop unavailable for MCP test.")
+                names = asyncio.run_coroutine_threadsafe(probe(), loop).result(timeout=25)
             except TimeoutError:
                 deliver(("err", "Timed out after 20s. Check the URL or command."))
                 return
@@ -1875,10 +1921,9 @@ class AppController:
         if not (0 <= index < len(msgs)):
             return
         keep = msgs[:index]
-        state.messages = keep
-        # The session map must point at the SAME list the view shows, or the
-        # next streamed turn would write into the pre-cut list.
-        self._conv_messages[state.active_conversation] = keep
+        # _show_conversation re-points the map at the NEW wrapper, so the next
+        # streamed turn writes a list the view actually renders.
+        self._show_conversation(state.active_conversation, keep)
         agent = self.services.agent
         chat_history = agent.kani.chat_history if agent.kani is not None else None
         if chat_history is not None:

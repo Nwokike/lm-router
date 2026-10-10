@@ -34,6 +34,9 @@ from mcp.client.stdio import get_default_environment
 from core.logging import LOG
 from core.settings import AppSettings, MCPServerConfig
 
+MCP_DESC_CAP = 2000
+MCP_RESULT_CAP = 6000
+
 # The MCP SDK's ClientSessionGroup._establish_session cleans up with
 # `except Exception` — CANCELLED (our connect timeout) skips it, the
 # half-open stdio/SSE/streamable client generator stays suspended, and its
@@ -42,6 +45,91 @@ from core.settings import AppSettings, MCPServerConfig
 # the current tasks's current"). Track every client the SDK opens so WE
 # can close it in the task that entered it, immediately, deterministically.
 _PENDING_CLIENTS: list = []
+
+
+def _extract_session(tool) -> tuple[object | None, str]:
+    """The (ClientSessionGroup, tool name) a kani MCP tool closes over.
+
+    kani builds `AIFunction(partial(_call_mcp_tool, name))` where the closed
+    over `grp` is the live session group. We need both to rebuild the tool
+    body; anything unrecognisable (test stubs, a future kani shape) returns
+    (None, "") and the tool keeps kani's own body.
+    """
+    inner = getattr(tool, "inner", None)
+    wrapped = getattr(tool, "__wrapped__", None) or getattr(inner, "__wrapped__", None)
+    if wrapped is None:
+        return None, ""
+    func = getattr(wrapped, "func", None)
+    args = getattr(wrapped, "args", None) or (getattr(tool, "name", ""),)
+    name = str(args[0]) if args else ""
+    closure = getattr(func, "__closure__", None) or ()
+    for cell in closure:
+        candidate = getattr(cell, "cell_contents", None)
+        if candidate is not None and hasattr(candidate, "call_tool"):
+            return candidate, name
+    return None, ""
+
+
+def _mcp_tool_body(grp: object, name: str):
+    """A tool body that handles every content block kani rejects.
+
+    kani's wrapper only understands text/image/audio and RAISES on
+    EmbeddedResource — which is exactly what file/docs servers (GitHub's
+    get_file_contents returns the file as a text resource) send back. This
+    renders resources as "[uri]\\n<text>", notes media it cannot inline, and
+    never raises: a tool error costs the model a whole turn.
+    """
+
+    async def _body(**kwargs) -> str:
+        result = await grp.call_tool(name, arguments=kwargs)  # type: ignore[attr-defined]
+        parts: list[str] = []
+        for block in getattr(result, "content", None) or []:
+            kind = str(getattr(block, "type", "") or "")
+            if kind == "text":
+                parts.append(str(getattr(block, "text", "") or ""))
+            elif kind == "resource":
+                resource = getattr(block, "resource", None)
+                text = str(getattr(resource, "text", "") or "")
+                uri = str(getattr(resource, "uri", "") or "")
+                if not text:
+                    continue
+                parts.append(f"[{uri}]\n{text}" if uri else text)
+            else:
+                # Images/audio need multimodal parts the transcript cannot
+                # carry text-only; a note beats failing the whole call.
+                parts.append(f"[{kind or 'unknown'} content omitted]")
+        return "\n\n".join(p for p in parts if p) or "(no content)"
+
+    return _body
+
+
+def _harden_mcp_tools(tools: list) -> list:
+    """Cap schemas, arm auto_truncate, and replace kani's MCP bodies."""
+    out: list = []
+    for tool in tools:
+        desc = getattr(tool, "desc", None)
+        if isinstance(desc, str) and len(desc) > MCP_DESC_CAP:
+            tool.desc = desc[:MCP_DESC_CAP] + "...(truncated)"
+        grp, name = _extract_session(tool)
+        schema = getattr(tool, "json_schema", None)
+        if grp is None or not name or not schema:
+            # Unrecognised shape: keep kani's body, just arm the truncation.
+            if getattr(tool, "auto_truncate", None) is None:
+                tool.auto_truncate = MCP_RESULT_CAP
+            out.append(tool)
+            continue
+        from kani.ai_function import AIFunction
+
+        out.append(
+            AIFunction(
+                _mcp_tool_body(grp, name),
+                name=tool.name,
+                desc=tool.desc,
+                json_schema=schema,
+                auto_truncate=MCP_RESULT_CAP,
+            )
+        )
+    return out
 
 
 class _TrackedClient:
@@ -657,18 +745,17 @@ class MCPHub:
             all_tools.extend(tools)
             all_names.extend(str(getattr(t, "name", "?")) for t in tools)
 
-        # Remote servers are untrusted: cap what one can push into EVERY
-        # future request (a huge tool description is both a token bomb and a
-        # prompt-injection surface). Also arm kani's paragraph-aware
-        # auto_truncate: kani's default for MCP tools is None, so returning
-        # 50KB-100KB of search/scrape results persisted verbatim in chat_history
-        # and blew up prompt prefill on every subsequent round.
-        for tool in all_tools:
-            desc = getattr(tool, "desc", None)
-            if isinstance(desc, str) and len(desc) > 2000:
-                tool.desc = desc[:2000] + "...(truncated)"
-            if getattr(tool, "auto_truncate", None) is None:
-                tool.auto_truncate = 6000
+        # Untrusted-remote hygiene + kani's MCP wrapper crash fix:
+        #  * cap what one can push into EVERY future request (a huge tool
+        #    description is both a token bomb and a prompt-injection surface),
+        #  * arm kani's paragraph-aware auto_truncate (its default for MCP
+        #    tools is None, so 50-100KB of search/scrape results persisted
+        #    verbatim and blew up prefill on every subsequent round), and
+        #  * REBUILD each tool body: kani's wrapper raises ValueError on
+        #    EmbeddedResource blocks (GitHub get_file_contents returns the file
+        #    as a text resource), which makes the tool error out instead of
+        #    returning the content.
+        all_tools = _harden_mcp_tools(all_tools)
         self._contexts = contexts
         self.tools = all_tools
         self.names = all_names

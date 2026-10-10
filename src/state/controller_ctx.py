@@ -56,6 +56,7 @@ class ControllerMethods:
     remove_provider: Callable[[str], None] = _noop
     select_provider: Callable[[str], None] = _noop
     add_mcp_server: Callable[[dict], bool] = _noop
+    mcp_server_id_by_name: Callable[[str], str] = _noop
     remove_mcp_server: Callable[[str], None] = _noop
     toggle_mcp_server: Callable[[str], None] = _noop
     toggle_mcp_tool: Callable[[str, str], None] = _noop

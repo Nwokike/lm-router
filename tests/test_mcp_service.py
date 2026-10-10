@@ -765,3 +765,76 @@ async def test_mcp_tools_are_auto_truncated_and_desc_capped(monkeypatch) -> None
     assert tool.auto_truncate == 6000
     assert len(tool.desc) == 2000 + len("...(truncated)")
     assert tool.desc.endswith("...(truncated)")
+
+
+@pytest.mark.anyio
+async def test_mcp_resource_content_becomes_text() -> None:
+    """kani's MCP wrapper RAISES on EmbeddedResource blocks.
+
+    GitHub's get_file_contents returns the file as a text resource, so the
+    stock wrapper turns a successful read into "Unsupported MCP return value"
+    and the tool errors out (owner log). Our replacement body must render
+    resources as "[uri]\\n<text>" and never raise.
+    """
+    from types import SimpleNamespace
+
+    from services.mcp import _mcp_tool_body
+
+    class _FixedGrp:
+        def __init__(self, result) -> None:
+            self._result = result
+
+        async def call_tool(self, name, arguments):
+            return self._result
+
+    class _Result:
+        content = (
+            SimpleNamespace(type="text", text="header line"),
+            SimpleNamespace(
+                type="resource",
+                resource=SimpleNamespace(uri="repo://o/r/sha/x/contents/README.md", text="# Hi"),
+            ),
+        )
+
+    calls: list = []
+
+    class _Grp:
+        async def call_tool(self, name, arguments):
+            calls.append((name, arguments))
+            return _Result()
+
+    body = _mcp_tool_body(_FixedGrp(_Result()), "srv.get_file")
+    out = await body(path="README.md")
+    assert "header line" in out
+    assert "[repo://o/r/sha/x/contents/README.md]" in out
+    assert "# Hi" in out
+
+    # An unknown block type degrades to a note instead of raising.
+    class _Unknown:
+        content = (SimpleNamespace(type="mystery"),)
+
+    out2 = await _mcp_tool_body(_FixedGrp(_Unknown()), "srv.y")()
+    assert "[mystery content omitted]" in out2
+
+    # A text-less resource is skipped rather than emitted as an empty row.
+    class _EmptyResource:
+        content = (
+            SimpleNamespace(type="resource", resource=SimpleNamespace(uri="repo://x", text="")),
+        )
+
+    out3 = await _mcp_tool_body(_FixedGrp(_EmptyResource()), "srv.z")()
+    assert out3 == "(no content)"
+
+
+@pytest.mark.anyio
+async def test_mcp_tools_without_a_session_are_left_alone(monkeypatch) -> None:
+    """A stub tool (no kani closure) keeps its own body, just gets capped."""
+    from types import SimpleNamespace
+
+    from services.mcp import _harden_mcp_tools
+
+    stub = SimpleNamespace(name="stub", desc="d" * 5000, json_schema=None, auto_truncate=None)
+    out = _harden_mcp_tools([stub])
+    assert out == [stub]
+    assert out[0].auto_truncate == 6000
+    assert len(out[0].desc) == 2000 + len("...(truncated)")

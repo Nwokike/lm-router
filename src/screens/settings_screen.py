@@ -767,6 +767,15 @@ def SettingsScreen():
         set_m_headers("")
         set_mcp_open(False)
         show_snack(page, "MCP server added.")
+        # Auto-Test: the server is stored and connecting, so probe it right
+        # away — the tool list and the Test spinner appear without a second
+        # click (owner: "after adding a tool, shouldn't the test run itself?").
+        # The id comes from the controller's LIVE settings: our own snapshot
+        # only reloads on the next render, so it cannot see the new server.
+        name_hint = str(payload.get("name") or "").strip()
+        added = methods.mcp_server_id_by_name(name_hint) if name_hint else ""
+        if added:
+            _test_mcp(added)
 
     def _test_mcp(server_id: str) -> None:
         if server_id in state.mcp_testing:
