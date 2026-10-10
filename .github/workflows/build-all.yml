@@ -34,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       BUILD_VERSION: ${{ steps.resolve.outputs.BUILD_VERSION }}
+      BUILD_NUMBER: ${{ steps.resolve.outputs.BUILD_NUMBER }}
     steps:
       - uses: actions/checkout@v4
       - name: Resolve BUILD_VERSION
@@ -48,6 +49,18 @@ jobs:
           fi
           echo "BUILD_VERSION=$V" >> "$GITHUB_OUTPUT"
           echo "Resolved BUILD_VERSION=$V"
+          # Same trap as BUILD_VERSION: build_number is a workflow_dispatch-only
+          # input, so a TAG push used to fall through to the hardcoded '1' and
+          # the quality gate then failed with
+          #   core.constants.BUILD_NUMBER 2 != BUILD_NUMBER 1
+          # the moment the repo bumped past build 1. Dispatch input wins; every
+          # other path reads the committed value.
+          B="${{ inputs.build_number }}"
+          if [ -z "$B" ]; then
+            B=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['tool']['flet']['build_number'])")
+          fi
+          echo "BUILD_NUMBER=$B" >> "$GITHUB_OUTPUT"
+          echo "Resolved BUILD_NUMBER=$B"
 
   # ─── Q. Quality gate: lint + tests (blocks every build) ───────────────
   quality:
@@ -55,6 +68,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BUILD_VERSION: ${{ needs.resolve-version.outputs.BUILD_VERSION }}
+      BUILD_NUMBER: ${{ needs.resolve-version.outputs.BUILD_NUMBER }}
+      BUILD_NUMBER: ${{ needs.resolve-version.outputs.BUILD_NUMBER }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -185,6 +200,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BUILD_VERSION: ${{ needs.resolve-version.outputs.BUILD_VERSION }}
+      BUILD_NUMBER: ${{ needs.resolve-version.outputs.BUILD_NUMBER }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -226,6 +242,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BUILD_VERSION: ${{ needs.resolve-version.outputs.BUILD_VERSION }}
+      BUILD_NUMBER: ${{ needs.resolve-version.outputs.BUILD_NUMBER }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -262,6 +279,7 @@ jobs:
     runs-on: windows-latest
     env:
       BUILD_VERSION: ${{ needs.resolve-version.outputs.BUILD_VERSION }}
+      BUILD_NUMBER: ${{ needs.resolve-version.outputs.BUILD_NUMBER }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -332,6 +350,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BUILD_VERSION: ${{ needs.resolve-version.outputs.BUILD_VERSION }}
+      BUILD_NUMBER: ${{ needs.resolve-version.outputs.BUILD_NUMBER }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6

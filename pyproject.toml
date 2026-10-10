@@ -29,7 +29,7 @@ package = false
 org = "ng.kiri"
 product = "LM Router"
 company = "Kiri Research Labs"
-build_number = 1
+build_number = 2
 
 [tool.flet.app]
 path = "src"
