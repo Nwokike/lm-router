@@ -69,7 +69,6 @@ jobs:
     env:
       BUILD_VERSION: ${{ needs.resolve-version.outputs.BUILD_VERSION }}
       BUILD_NUMBER: ${{ needs.resolve-version.outputs.BUILD_NUMBER }}
-      BUILD_NUMBER: ${{ needs.resolve-version.outputs.BUILD_NUMBER }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
