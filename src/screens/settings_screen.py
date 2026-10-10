@@ -431,7 +431,6 @@ def SettingsScreen():
         set_draft_prompt(fresh.system_prompt)
         set_port_text(str(fresh.gateway_port))
         set_autostart(fresh.gateway_autostart)
-        set_keep_running(fresh.keep_running_when_closed)
         set_gen_temperature(f"{fresh.temperature:g}")
         set_gen_top_p(f"{fresh.top_p:g}")
         set_gen_max_tokens(str(fresh.max_reply_tokens))
@@ -462,7 +461,6 @@ def SettingsScreen():
     draft_prompt, set_draft_prompt = ft.use_state(settings.system_prompt)
     port_text, set_port_text = ft.use_state(str(settings.gateway_port))
     autostart, set_autostart = ft.use_state(settings.gateway_autostart)
-    keep_running, set_keep_running = ft.use_state(settings.keep_running_when_closed)
     provider_open, set_provider_open = ft.use_state(False)
     mcp_open, set_mcp_open = ft.use_state(False)
     mcp_expanded, set_mcp_expanded = ft.use_state("")
@@ -584,10 +582,6 @@ def SettingsScreen():
     def _save_prompt(_: object) -> None:
         methods.save_settings({"system_prompt": draft_prompt})
         show_snack(page, "System prompt saved.")
-
-    def _set_keep_running(value: bool) -> None:
-        set_keep_running(value)
-        methods.save_settings({"keep_running_when_closed": value})
 
     def _save_generation(_: object) -> None:
         """Persist every generation knob, clamped to the model's own bounds.
@@ -906,20 +900,6 @@ def SettingsScreen():
                     # switches used to have opposite semantics with no label
                     # saying so, and this one silently discarded on navigate.
                     on_change=lambda e: _set_autostart(bool(e.control.value)),
-                ),
-                stacked=narrow,
-            ),
-            setting_row(
-                icon=ft.Icons.MINIMIZE_ROUNDED,
-                title="Keep gateway running when closed",
-                # Off means X closes the app and stops the gateway. On means X
-                # hides the window; Quit is always in the header, so the app
-                # can never look like it crashed.
-                subtitle="Closing the window hides it instead",
-                trailing=ft.Switch(
-                    value=keep_running,
-                    active_color=ft.Colors.PRIMARY,
-                    on_change=lambda e: _set_keep_running(bool(e.control.value)),
                 ),
                 stacked=narrow,
             ),

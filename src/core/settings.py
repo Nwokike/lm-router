@@ -174,11 +174,7 @@ class AppSettings(BaseSettings):
     last_model: str = ""
     gateway_port: int = Field(default=constants.DEFAULT_GATEWAY_PORT, ge=1, le=65535)
     gateway_autostart: bool = True
-    # Desktop: X hides the window and the gateway keeps serving. Off means
-    # X closes the app and stops the gateway. Either way there is a
-    # visible Quit, so the app can never look crashed.
-    keep_running_when_closed: bool = True
-    # Share: publish this device's gateway through a public tunnel.
+    # share_enabled: publish this device's gateway through a public tunnel.
     # Off by default; the gateway itself has no auth, so turning this on
     # with require_share_key=False is an open relay by choice.
     share_enabled: bool = False

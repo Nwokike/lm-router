@@ -330,7 +330,8 @@ def test_lifecycle_and_back_hooks_registered(boot_page) -> None:
 
     assert boot_page.on_view_pop == controller._on_view_pop
     assert boot_page.on_app_lifecycle_state_change == controller._on_lifecycle
-    assert boot_page.on_close == controller._quit_app
+    # The console/session close asks before quitting, like the X button.
+    assert boot_page.on_close == controller._on_page_close
     assert boot_page.on_disconnect == controller._on_disconnect
 
 
@@ -351,9 +352,25 @@ def test_back_underlay_is_installed_once(boot_page) -> None:
     assert len(boot_page.views) == 2, "underlay install must be idempotent"
 
 
-def test_view_pop_navigates_and_root_follows_keep_running(boot_page, monkeypatch) -> None:
-    """Owner rule: system back maps to in-app navigation; at Chat root it
-    mirrors the desktop X semantics (keep-running ON backgrounds, OFF quits)."""
+def _dialog_texts(node, depth: int = 0):
+    """Every .value in a control tree (crosses controls/content/title/actions)."""
+    if node is None or depth > 40:
+        return
+    if isinstance(node, (list, tuple)):
+        for item in node:
+            yield from _dialog_texts(item, depth + 1)
+        return
+    value = getattr(node, "value", None)
+    if isinstance(value, str):
+        yield value
+    for attr in ("controls", "content", "title", "actions"):
+        yield from _dialog_texts(getattr(node, attr, None), depth + 1)
+
+
+def test_view_pop_navigates_and_root_never_quits(boot_page, monkeypatch) -> None:
+    """Owner rule: system back maps to in-app navigation and must NEVER tear
+    down the shell — the old background/quit-at-root split was removed when
+    the X button became a confirm dialog."""
     from main import AppController
 
     controller = AppController(boot_page)
@@ -376,17 +393,60 @@ def test_view_pop_navigates_and_root_follows_keep_running(boot_page, monkeypatch
     assert state.selected_tab == 0
     assert shell.route != "/", "restore must re-key the popped route"
 
-    # Root + keep-running ON (default): background, never quit.
+    # At the Chat root the shell stays: no quit, no hide.
     quits: list[int] = []
     monkeypatch.setattr(controller, "_quit_app", lambda: quits.append(1))
     state.selected_tab = 0
     controller._on_view_pop(back_event())
-    assert quits == [], "keep-running ON must background, not quit"
+    assert quits == [], "system back at the root must not quit the app"
 
-    # Root + keep-running OFF: full teardown.
-    controller.settings.keep_running_when_closed = False
-    controller._on_view_pop(back_event())
-    assert quits == [1], "keep-running OFF must quit"
+
+def test_x_button_asks_before_quitting(boot_page) -> None:
+    """The X button must confirm, and say what quitting costs: the gateway
+    stops and anything talking to it (including the shared URL) disconnects."""
+    import contextlib
+
+    from main import AppController
+
+    controller = AppController(boot_page)
+    controller.init()
+    boot_page.drain()
+
+    # The prevent_close intercept is what routes X to our handler at all.
+    assert boot_page.window.prevent_close is True
+    assert boot_page.window.on_event == controller._on_window_event
+
+    shown: list = []
+    original_show = boot_page.show_dialog
+    boot_page.show_dialog = lambda dialog: (shown.append(dialog), original_show(dialog))
+    try:
+        controller._on_window_event(
+            type("E", (), {"type": ft.WindowEventType.CLOSE, "data": None})()
+        )
+    finally:
+        boot_page.show_dialog = original_show
+
+    assert shown, "the close event must raise a dialog, not quit silently"
+    dialog = shown[0]
+    texts = list(_dialog_texts(dialog))
+    assert any("Quit" in t for t in texts), texts
+    assert any("gateway" in t.lower() for t in texts), texts
+
+    # Cancel is the safe default and is present alongside Quit. (Flet 1.0
+    # keeps a TextButton's label on `.content`, not `.text`.)
+    def _button_label(button) -> str:
+        return str(getattr(button, "text", None) or getattr(button, "content", "") or "")
+
+    actions = list(getattr(dialog, "actions", None) or [])
+    labels = [_button_label(a) for a in actions]
+    assert "Cancel" in labels and "Quit" in labels, labels
+
+    # The dialog must not have quit anything on its own.
+    quits: list[int] = []
+    controller._quit_app = lambda: quits.append(1)  # type: ignore[method-assign]
+    with contextlib.suppress(Exception):
+        controller._quit_confirmed()
+    assert quits == [1], "confirming the dialog must quit"
 
 
 def test_lifecycle_flushes_on_hide_and_reprobes_on_resume(boot_page, monkeypatch) -> None:

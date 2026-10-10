@@ -132,8 +132,8 @@ class AppController:
         page.theme_mode = THEME_MODES.get(settings.theme, ft.ThemeMode.SYSTEM)
         page.fonts = theme.FONTS
 
-        # Keep-alive: closing the window hides it to the taskbar so the
-        # gateway thread keeps running (locked v1 decision).
+        # The X button asks before quitting (see _on_window_event); on mobile
+        # and web the session's on_close is the only exit signal, handled below.
         try:
             if page.platform.is_desktop():
                 page.window.prevent_close = True
@@ -149,13 +149,15 @@ class AppController:
 
         # Lifecycle: flet 1.0 exits without running atexit/buffered writes
         # (DDGS), and on Android these are the ONLY teardown signals — the
-        # window.on_event hook above is desktop-gated. on_close/on_disconnect
-        # are session events (web/session-expiry) and double as the desktop
-        # safety net; both handlers are idempotent.
+        # window.on_event hook above is desktop-gated. on_close fires for the
+        # session/console close paths AND when the framework closes the page
+        # itself, so it asks before quitting exactly like the X button; with
+        # prevent_close=True the window's own close never reaches here.
+        # Both handlers are idempotent.
         try:
             page.on_view_pop = self._on_view_pop
             page.on_app_lifecycle_state_change = self._on_lifecycle
-            page.on_close = self._quit_app
+            page.on_close = self._on_page_close
             page.on_disconnect = self._on_disconnect
         except Exception as exc:
             LOG.info("lifecycle hooks unavailable: %s", exc)
@@ -533,14 +535,45 @@ class AppController:
         # `.data` is None, so the old check never matched and the X button
         # looked dead while prevent_close kept the window open.
         if getattr(event, "type", None) == ft.WindowEventType.CLOSE:
-            if self.settings.keep_running_when_closed:
-                # Hide, keep serving. The user always has a visible Quit
-                # (header + Settings), so this can never look like a crash.
-                self.page.window.visible = False
-                LOG.info("window hidden; gateway still running in the background")
-            else:
-                LOG.info("window closed; shutting the gateway down")
-                self._quit_app()
+            # No silent hide-to-taskbar: the user pressed X expecting the app
+            # to close, and a window that vanishes with no taskbar entry and no
+            # way back reads as a crash (owner: "it does not close and it does
+            # not minimize"). Ask first, and say what quitting costs: the
+            # gateway stops, so anything talking to it (other chat apps, the
+            # public share URL) loses the connection.
+            self._confirm_quit()
+
+    def _on_page_close(self, e: object = None) -> None:
+        """Session/console close: ask before quitting, exactly like the X.
+
+        The console window's own close (the "end sign") bypasses
+        window.on_event entirely and lands here; quitting straight from it
+        skipped the confirm and killed the gateway with no warning.
+        """
+        self._confirm_quit()
+
+    def _confirm_quit(self) -> None:
+        """Ask before quitting — quitting ends the gateway and the share."""
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Quit LM Router?"),
+            content=ft.Text(
+                "This stops your local gateway and disconnects anything "
+                "talking to it, including the shared URL. Chats, keys and "
+                "settings stay on this device.",
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda _: self.page.pop_dialog()),
+                ft.TextButton("Quit", on_click=lambda _: self._quit_confirmed()),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.page.show_dialog(dialog)
+
+    def _quit_confirmed(self) -> None:
+        with contextlib.suppress(Exception):
+            self.page.pop_dialog()
+        self._quit_app()
 
     def _set_tab(self, index: int) -> None:
         # Clamp once at the single setter so every caller (nav bar, header
@@ -1730,7 +1763,6 @@ class AppController:
             "theme",
             "gateway_port",
             "gateway_autostart",
-            "keep_running_when_closed",
             "share_enabled",
             "require_share_key",
             "share_key",
@@ -2251,44 +2283,16 @@ class AppController:
         except Exception as exc:
             LOG.info("shell restore failed: %s", exc)
 
-    def _background_app(self) -> None:
-        """Hide without dying, keeping the gateway serving — the desktop
-        window.on_event path does the same thing via window.visible."""
-        try:
-            is_desktop = bool(self.page.platform.is_desktop())
-        except Exception as exc:
-            LOG.debug("platform probe failed: %s", exc)
-            is_desktop = False
-        if is_desktop:
-            try:
-                self.page.window.visible = False
-                return
-            except Exception as exc:
-                LOG.info("window hide failed: %s", exc)
-        try:
-            activity = self._android_activity()
-            if activity is not None:
-                activity.moveTaskToBack(True)
-                return
-            LOG.info("no android activity to background; shell restored only")
-        except Exception as exc:
-            LOG.info("android background failed: %s", exc)
-
     def _on_view_pop(self, e: ft.ViewPopEvent) -> None:
         """Owner rule (Sherlock): system back must never tear down the shell
-        — it maps to in-app navigation. At the Chat root the owner chose
-        desktop parity: keep-running ON → background, OFF → full teardown."""
+        — it maps to in-app navigation, and at the Chat root it just stays."""
         try:
             popped = getattr(e, "view", None)
             if state.selected_tab != 0:
                 state.selected_tab = 0
                 self._restore_shell(popped)
                 return
-            if self.settings.keep_running_when_closed:
-                self._restore_shell(popped)
-                self._background_app()
-            else:
-                self._quit_app()
+            self._restore_shell(popped)
         except Exception as exc:
             LOG.warning("view_pop handling failed: %s", exc)
 

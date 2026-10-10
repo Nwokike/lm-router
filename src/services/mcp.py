@@ -774,13 +774,33 @@ class MCPHub:
             self._status(None)
 
     async def _close_owned(self) -> None:
-        """Exit every context — MUST run in the same task that entered them."""
+        """Exit every context — MUST run in the same task that entered them.
+
+        An SDK context that already unwound (its transport was cancelled, or
+        the session it wraps was terminated) refuses to exit again with
+        "Attempted to exit a cancel scope that isn't the current tasks's
+        current cancel scope" (owner log, 09:59:07). That is RuntimeError —
+        NOT an Exception — so it escaped the per-context guard, killed the
+        owner task, and tore down the loop that owned the sessions. Catch it
+        (plus CancelledError, a BaseException), drop the context, and keep
+        going: a context that will not close is still a closed context.
+        """
         contexts, self._contexts = self._contexts, []
         for context in contexts:
             try:
                 await context.__aexit__(None, None, None)
+            except asyncio.CancelledError:
+                # The context's own scope was already cancelled; swallowing
+                # here is safe because the SDK work is dead, not mid-flight.
+                LOG.info("mcp disconnect: context already cancelled; dropping it")
             except Exception as exc:
                 LOG.warning("mcp disconnect: %s", exc)
+            except BaseException as exc:
+                # Deliberately broad and deliberate comment: an unwound SDK
+                # context raises RuntimeError (not Exception), and letting it
+                # escape here kills the owner task and the loop that owns every
+                # session. The context is dead either way — drop and continue.
+                LOG.warning("mcp disconnect (%s); dropping context", type(exc).__name__)
         self._contexts = []
         self.tools = []
         self.names = []
