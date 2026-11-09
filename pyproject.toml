@@ -1,23 +1,23 @@
 [project]
 name = "lm-router"
-version = "1.1.0"
-description = "LM Router — chat with free models through your own local gateway. OpenAI compatible, no API key; the gateway runs on your device and messages go to third-party providers."
+version = "1.2.0"
+description = "LM Router — an OpenAI-compatible LLM gateway that runs on your device. Free models, one-tap model probes, shareable URL; requests exit from your IP to third-party providers."
 readme = "README.md"
 authors = [
     { name = "Nwokike", email = "onyeka@kiri.ng" }
 ]
 
-requires-python = ">=3.14,<3.15"
+requires-python = ">=3.15,<3.16"
 dependencies = [
-    "flet>=1.0.4",
-    "flet-ads>=1.0.4",
-    "kani[mcp,openai]>=1.10.0",
+    "flet>=1.1.2",
+    "flet-ads>=1.1.2",
+    "flet-notifications>=1.1.2",
 ]
 
 [dependency-groups]
 dev = [
-    "flet-cli>=1.0.4",
-    "flet-desktop>=1.0.4",
+    "flet-cli>=1.1.2",
+    "flet-desktop>=1.1.2",
     "pytest>=9.1.1",
     "ruff>=0.16.8",
 ]
@@ -29,7 +29,7 @@ package = false
 org = "ng.kiri"
 product = "LM Router"
 company = "Kiri Research Labs"
-build_number = 2
+build_number = 3
 
 [tool.flet.app]
 path = "src"
@@ -48,8 +48,6 @@ scheme = "lmrouter"
 host = "app"
 
 [tool.flet.android]
-# Compress native libs in the APK (pre-0.86 behaviour): since 0.86 flet stores
-# them uncompressed by default, which doubled APK download size.
 legacy_packaging = true
 bundle_id = "ng.kiri.lmrouter"
 
@@ -59,6 +57,17 @@ bundle_id = "ng.kiri.lmrouter"
 [tool.flet.android.permission]
 "android.permission.INTERNET" = true
 "android.permission.ACCESS_NETWORK_STATE" = true
+"android.permission.WAKE_LOCK" = true
+"android.permission.FOREGROUND_SERVICE" = true
+"android.permission.FOREGROUND_SERVICE_SPECIAL_USE" = true
+"android.permission.POST_NOTIFICATIONS" = true
+
+[tool.flet.android.service."com.dexterous.flutterlocalnotifications.ForegroundService"]
+exported = false
+foregroundServiceType = "specialUse"
+
+[tool.flet.android.service."com.dexterous.flutterlocalnotifications.ForegroundService".property]
+"android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" = "LM Router keeps its local LLM gateway alive in the background"
 
 [tool.flet.android.feature]
 "android.software.leanback" = false
@@ -76,12 +85,6 @@ key_alias = "upload"
 [tool.flet.cleanup]
 app = true
 
-# Upstream workaround for Flet <= 1.0.3 until 1.0.4 ships (Flet PR #6920):
-# Flet's template pins jni: 1.0.0, but on 2026-10-06 pub.dev released
-# jni_flutter 1.0.4+1 which enforces package:jni ^1.1.0 via JniVersionCheck.
-[tool.flet.flutter.pubspec.dependency_overrides]
-jni = "^1.1.0"
-
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
@@ -94,11 +97,10 @@ filterwarnings = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
+target-version = "py315"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "S", "RUF", "SIM105"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "S105", "S110", "S112"]
-"src/services/router_guide.py" = ["E501"]

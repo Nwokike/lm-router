@@ -33,19 +33,20 @@ _SLIDES = [
         "use_app_icon": True,
         "icon": None,
         "color": theme.PRIMARY,
-        "title": "Free models,\nright here",
+        "title": "Your gateway,\nthis device",
         "body": (
-            "Chat with free models through your own local gateway. "
+            "Run an OpenAI-compatible LLM gateway right on your phone. "
             "No account, no API key, no credits."
         ),
     },
     {
-        "icon": ft.Icons.CHAT_ROUNDED,
+        "icon": ft.Icons.DNS_ROUNDED,
         "color": theme.PRIMARY,
         "title": "Any tool,\nany model",
         "body": (
-            "OpenAI compatible: use Cursor, Cline, Claude Code or any SDK. "
-            "Streaming replies, web search, stop anytime, token counts."
+            "Point Cursor, Cline, Claude Code or any OpenAI SDK at your "
+            "gateway. Probe models with one tap, share the URL with an "
+            "optional key, keep it alive in the background."
         ),
     },
     {
@@ -53,10 +54,9 @@ _SLIDES = [
         "color": theme.PRIMARY,
         "title": "Your data,\nyour device",
         "body": (
-            "Your chat history and any provider keys you add stay on this "
-            "device, in this app's own storage. Prompts are sent to free "
-            "third-party model providers, which may log them. See our "
-            "Privacy Policy."
+            "Settings and provider keys stay on this device, in this app's "
+            "own storage. Requests exit from your IP to free third-party "
+            "model providers, which may log them. See our Privacy Policy."
         ),
     },
 ]

@@ -1,8 +1,7 @@
 """App shell: onboarding gate, offline banner, AppHeader + bottom navigation.
 
-History is a sub-view, not a fourth tab: the NavigationBar carries three
-destinations (Chat/Server/Settings) and opening History keeps the bar's
-highlight on the tab the user came from instead of lying about location.
+Three tabs: Server (the homepage — the gateway IS the app), Test (a single
+model probe), and Settings.
 """
 
 import contextlib
@@ -10,14 +9,13 @@ import contextlib
 import flet as ft
 
 from components.app_header import AppHeader
-from core import theme, tokens
+from core import tokens
 from core.notify import show_snack
 from core.state import AppStateCtx
-from screens.chat_screen import ChatScreen
-from screens.history_screen import HistoryScreen
 from screens.onboarding_screen import OnboardingScreen
 from screens.server_screen import ServerScreen
 from screens.settings_screen import SettingsScreen
+from screens.test_screen import TestScreen
 from state.controller_ctx import ControllerMethodsCtx
 
 
@@ -40,24 +38,20 @@ def _sync_navigation_bar(page, state, methods) -> None:
             with contextlib.suppress(Exception):
                 page.update()
         return
-    index = state.selected_tab if 0 <= state.selected_tab < 4 else 0
+    index = state.selected_tab if 0 <= state.selected_tab < 3 else 0
     view.navigation_bar = ft.NavigationBar(
-        # History (3) is a sub-view: keep the highlight on the last real tab
-        # so the bar never claims the user is on Chat while reading History.
-        selected_index=state.last_nav_tab
-        if 0 <= state.last_nav_tab < 3
-        else (index if index < 3 else 0),
+        selected_index=index,
         on_change=lambda e: methods.set_tab(int(e.control.selected_index)),
         destinations=[
-            ft.NavigationBarDestination(
-                icon=ft.Icons.CHAT_BUBBLE_OUTLINE,
-                selected_icon=ft.Icons.CHAT_BUBBLE,
-                label="Chat",
-            ),
             ft.NavigationBarDestination(
                 icon=ft.Icons.DNS_OUTLINED,
                 selected_icon=ft.Icons.DNS,
                 label="Server",
+            ),
+            ft.NavigationBarDestination(
+                icon=ft.Icons.SCIENCE_OUTLINED,
+                selected_icon=ft.Icons.SCIENCE_ROUNDED,
+                label="Test",
             ),
             ft.NavigationBarDestination(
                 icon=ft.Icons.SETTINGS_OUTLINED,
@@ -125,7 +119,7 @@ def AppShell():
                         color=ft.Colors.ON_ERROR,
                     ),
                     ft.Text(
-                        "You're offline. Gateway and search may be unavailable.",
+                        "You're offline. Gateway and sharing may be unavailable.",
                         size=tokens.FONT_MD,
                         weight=ft.FontWeight.BOLD,
                         color=ft.Colors.ON_ERROR,
@@ -139,26 +133,15 @@ def AppShell():
 
     def _build_view(index: int):
         # Lazy: only the visible screen pays construction cost each render.
-        # The old 4-element list rebuilt Chat+Server+Settings+History (catalog
-        # closures, tier lookups, pill builders) on every log flush at ~2Hz.
+        # The old full-list rebuild paid catalog closures and pill builders
+        # on every log flush at ~2Hz.
         if index == 1:
             return ft.Column(
                 expand=True,
                 spacing=0,
                 controls=[
-                    AppHeader(
-                        title="Server",
-                        show_quit=True,
-                        extra_actions=[
-                            ft.IconButton(
-                                ft.Icons.TERMINAL_ROUNDED,
-                                icon_size=tokens.ICON_MD,
-                                tooltip="Activity log",
-                                on_click=lambda _: methods.open_log_terminal(),
-                            ),
-                        ],
-                    ),
-                    ServerScreen(key=ft.ValueKey("view-server")),
+                    AppHeader(title="Test", show_quit=True),
+                    TestScreen(key=ft.ValueKey("view-test")),
                 ],
             )
         if index == 2:
@@ -170,52 +153,28 @@ def AppShell():
                     SettingsScreen(key=ft.ValueKey("view-settings")),
                 ],
             )
-        if index == 3:
-            return ft.Column(
-                expand=True,
-                spacing=0,
-                controls=[
-                    AppHeader(title="History", show_quit=True),
-                    HistoryScreen(key=ft.ValueKey("view-history")),
-                ],
-            )
+        # index == 0: Server is the homepage.
         return ft.Column(
             expand=True,
             spacing=0,
             controls=[
                 AppHeader(
-                    title="Chat",
+                    title="Server",
+                    show_quit=True,
                     extra_actions=[
-                        # DDGS tight pair: creation first, history next, no
-                        # gap between them. New chat lives here so starting
-                        # fresh never requires leaving the conversation.
                         ft.IconButton(
-                            ft.Icons.ADD_ROUNDED,
-                            icon_size=18,
-                            icon_color=theme.PRIMARY,
-                            tooltip="New chat",
-                            style=ft.ButtonStyle(
-                                padding=ft.Padding(2, 6, 2, 6),
-                            ),
-                            on_click=lambda _: methods.new_conversation(),
-                        ),
-                        ft.IconButton(
-                            ft.Icons.HISTORY_ROUNDED,
-                            icon_size=18,
-                            icon_color=theme.PRIMARY,
-                            tooltip="History",
-                            style=ft.ButtonStyle(
-                                padding=ft.Padding(2, 6, 2, 6),
-                            ),
-                            on_click=lambda _: methods.set_tab(3),
+                            ft.Icons.TERMINAL_ROUNDED,
+                            icon_size=tokens.ICON_MD,
+                            tooltip="Activity log",
+                            on_click=lambda _: methods.open_log_terminal(),
                         ),
                     ],
                 ),
-                ChatScreen(key=ft.ValueKey("view-chat")),
+                ServerScreen(key=ft.ValueKey("view-server")),
             ],
         )
 
-    index = state.selected_tab if 0 <= state.selected_tab < 4 else 0
+    index = state.selected_tab if 0 <= state.selected_tab < 3 else 0
 
     # SafeArea keeps the header clear of the Android status bar and the
     # content clear of the gesture bar; the nav itself is View chrome and

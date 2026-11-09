@@ -63,8 +63,8 @@ def test_no_engine_is_vendored_in_the_repo() -> None:
 def test_interpreter_band_is_pinned() -> None:
     pyproject, _ = _load()
     requires = pyproject["project"]["requires-python"]
-    # A python-build manifest bump must never silently jump to 3.15.
-    assert "<3.15" in requires
+    # A python-build manifest bump must never silently jump past 3.15.
+    assert "<3.16" in requires
 
 
 def test_target_arch_not_restricted() -> None:

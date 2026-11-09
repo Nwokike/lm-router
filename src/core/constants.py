@@ -1,8 +1,8 @@
 """Application-wide constants (single source: APP_VERSION)."""
 
 APP_NAME = "LM Router"
-APP_VERSION = "1.1.0"  # synced with pyproject + version.json by tests/test_version_sync.py
-BUILD_NUMBER = 2  # synced with pyproject tool.flet.build_number; version.json may lag (held back)
+APP_VERSION = "1.2.0"  # synced with pyproject + version.json by tests/test_version_sync.py
+BUILD_NUMBER = 3  # synced with pyproject tool.flet.build_number; version.json may lag (held back)
 
 ENGINE_URL = "https://router.kiri.ng/run.py"
 GITHUB_RELEASE_URL = "https://github.com/Nwokike/lm-router/releases/latest"

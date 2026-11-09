@@ -11,10 +11,6 @@ class Services:
     settings: Any = None
     http: Any = None
     engine: Any = None
-    agent: Any = None
-    search: Any = None
-    providers: Any = None
-    mcp: Any = None
     ads: Any = None
     update: Any = None
 
