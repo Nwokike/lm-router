@@ -176,6 +176,9 @@ jobs:
       - name: Generate Release Tag & Name
         id: tag_info
         run: |
+          # Releases ALWAYS stay pre-release (owner policy): notes are
+          # automated from the changelog, but nothing ships as "Latest"
+          # until the owner promotes it after the Play Store upload.
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "TAG_NAME=${{ github.ref_name }}" >> $GITHUB_OUTPUT
             echo "RELEASE_NAME=LM Router ${{ github.ref_name }} (pre-release, pending approval)" >> $GITHUB_OUTPUT
@@ -188,7 +191,16 @@ jobs:
             echo "IS_PRERELEASE=true" >> $GITHUB_OUTPUT
             echo "MAKE_LATEST=false" >> $GITHUB_OUTPUT
           fi
-      - name: Create GitHub Release Placeholder
+      - name: Generate release notes from changelog
+        if: github.event_name != 'pull_request'
+        run: |
+          uv sync --frozen
+          uv run --frozen python scripts/generate_release_notes.py \
+            --version "${{ needs.resolve-version.outputs.BUILD_VERSION }}" \
+            --build "${{ needs.resolve-version.outputs.BUILD_NUMBER }}" \
+            --output release_notes.md
+          cat release_notes.md
+      - name: Create GitHub Release
         if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
@@ -196,10 +208,9 @@ jobs:
           name: ${{ steps.tag_info.outputs.RELEASE_NAME }}
           prerelease: ${{ steps.tag_info.outputs.IS_PRERELEASE }}
           make_latest: ${{ steps.tag_info.outputs.MAKE_LATEST }}
-          body: |
-            Automated multi-platform build generated from commit `${{ github.sha }}`.
-
-            *This is a pre-release placeholder. Feel free to edit this title and description with your release notes right from the GitHub Releases UI.*
+          # Notes come from src/core/changelog.py (the same entry the app's
+          # What's New shows) — never a placeholder again.
+          body_path: release_notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

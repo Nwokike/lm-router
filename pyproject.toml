@@ -104,3 +104,6 @@ select = ["E", "F", "W", "I", "UP", "S", "RUF", "SIM105"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "S105", "S110", "S112"]
+# Release-note bullets read as full sentences; wrapping them at 100 chars
+# would put arbitrary mid-sentence breaks into the shipped notes.
+"src/core/changelog.py" = ["E501"]

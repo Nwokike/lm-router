@@ -1,0 +1,10 @@
+{
+  "build_number": 3,
+  "version": "1.2.0",
+  "type": "update",
+  "title": "LM Router 1.2.0",
+  "release_notes": "### 🚀 Gateway-First Rebuild\n• Server is the homepage — start the gateway, share it, and watch the model catalog live\n• The app is the router again: kani, OpenAI, MCP, pydantic and tiktoken removed\n• Pure-stdlib settings that survive corrupt files instead of crashing\n\n### 🧪 Technical Test Tab\n• One-tap model probes with the raw REQUEST and RESPONSE JSON shown in full\n• Collapsible reasoning block for thinking models, straight from the completion JSON\n• DDGS-style composer: Enter sends, Shift+Enter breaks the line, circular Send/Stop button\n\n### 📱 Background Keep-Alive\n• Foreground service + wake lock keep the gateway alive while the app is minimized\n• Ongoing notification with a Stop action that stops the gateway from the shade\n• flet 1.1.2 + flet-notifications 1.1.2 runtime across every platform build",
+  "mandatory": false,
+  "github_url": "https://github.com/Nwokike/lm-router/releases/latest",
+  "playstore_url": "https://play.google.com/store/apps/details?id=ng.kiri.lmrouter"
+}

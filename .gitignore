@@ -62,7 +62,7 @@ cache/
 .tmpw/
 *.log
 
-# Update-config payload: written locally, never published from a dev commit.
-# The app reads version.json from a URL, so a stray 2.x entry tells every
-# installed client to update for a release that is not live yet.
-version.json
+# Update-config payload: committed ONLY when its version is live (tag built
+# and released). The app reads version.json from a URL, so an entry ahead of
+# the live release would tell every installed client to update for an
+# unpublished build — the version-sync tests enforce feed <= app version.
