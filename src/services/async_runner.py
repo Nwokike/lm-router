@@ -22,9 +22,7 @@ class AsyncRunner:
     def __init__(self) -> None:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ready = threading.Event()
-        self._thread = threading.Thread(
-            target=self._serve, name="async-runner", daemon=True
-        )
+        self._thread = threading.Thread(target=self._serve, name="async-runner", daemon=True)
         self._thread.start()
         self._ready.wait(timeout=5)
 

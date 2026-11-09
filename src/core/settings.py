@@ -81,7 +81,7 @@ class AppSettings:
         if name == "gateway_port":
             try:
                 port = int(value)  # type: ignore[arg-type]
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 raise ValidationError("Port must be a number from 1 to 65535.") from None
             if not 1 <= port <= 65535:
                 raise ValidationError("Port must be a number from 1 to 65535.")
@@ -92,7 +92,7 @@ class AppSettings:
         elif name == "interstitial_every":
             try:
                 every = int(value)  # type: ignore[arg-type]
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 raise ValidationError("Interstitial interval must be 1 or more.") from None
             if every < 1:
                 raise ValidationError("Interstitial interval must be 1 or more.")

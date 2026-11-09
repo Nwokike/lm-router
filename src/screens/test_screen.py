@@ -35,7 +35,7 @@ def _pretty(payload: object) -> str:
     """Stable, selectable JSON text for the technical blocks."""
     try:
         return json.dumps(payload, indent=2, ensure_ascii=False)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return str(payload)
 
 
@@ -313,9 +313,7 @@ def TestScreen():
     rows: list[ft.Control] = []
     thinking_now = busy and not answer
     if reasoning or thinking_now:
-        rows.append(
-            ThinkingBlock(reasoning=reasoning, streaming=thinking_now, is_dark=is_dark)
-        )
+        rows.append(ThinkingBlock(reasoning=reasoning, streaming=thinking_now, is_dark=is_dark))
     if answer:
         rows.append(theme.markdown(answer, is_dark=is_dark))
     if error:
@@ -389,11 +387,7 @@ def TestScreen():
                     tooltip="Stop" if busy else "Send",
                     disabled=not busy and not draft.strip(),
                     style=ft.ButtonStyle(shape=ft.CircleBorder(), bgcolor=theme.PRIMARY),
-                    on_click=lambda _e: (
-                        _stop_probe()
-                        if busy
-                        else _send()
-                    ),
+                    on_click=lambda _e: _stop_probe() if busy else _send(),
                 ),
             ],
         ),

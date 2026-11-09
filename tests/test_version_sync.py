@@ -4,14 +4,26 @@ import json
 import tomllib
 from pathlib import Path
 
+import pytest
+
 from core.constants import APP_VERSION, BUILD_NUMBER
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# The in-app update feed is managed locally and may be absent from the repo
+# entirely (owner hold-back policy). CI checkouts have no version.json; the
+# workflow's quality gate handles that directly, and these tests skip.
+_VERSION_JSON = ROOT / "version.json"
+
+pytestmark = pytest.mark.skipif(
+    not _VERSION_JSON.exists(),
+    reason="version.json held back from the repo",
+)
+
 
 def _load() -> tuple[dict, dict]:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    version = json.loads((ROOT / "version.json").read_text(encoding="utf-8"))
+    version = json.loads(_VERSION_JSON.read_text(encoding="utf-8"))
     return pyproject, version
 
 

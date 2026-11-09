@@ -1,6 +1,5 @@
 """Settings: appearance, gateway, about."""
 
-
 import flet as ft
 
 from components.banner_ad import build_banner_ad
@@ -396,9 +395,6 @@ def SettingsScreen():
             ),
         ],
     )
-
-
-
 
     # About: the centred identity block, back as it was, minus the open-source
     # licence line, which the owner asked to drop. Buttons are centred too, so

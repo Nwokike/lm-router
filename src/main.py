@@ -646,9 +646,7 @@ class AppController:
 
         def work() -> None:
             try:
-                result = self._async.run(
-                    model_bench.test_model, http, base, model_id, endpoint
-                )
+                result = self._async.run(model_bench.test_model, http, base, model_id, endpoint)
             except Exception as exc:
                 LOG.warning("model test failed: %s", exc)
                 result = {
