@@ -21,7 +21,7 @@ permissions:
 env:
   PYTHONUTF8: "1"
   FLET_CLI_NO_RICH_OUTPUT: "1"
-  UV_PYTHON: "3.15"
+  UV_PYTHON: "3.14"
   BUILD_NUMBER: ${{ inputs.build_number || '1' }}
 
 jobs:
@@ -74,7 +74,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.15'
+          python-version: '3.14'
       - name: Install dependencies (frozen lockfile, includes dev group)
         run: uv sync --frozen
       - name: Version consistency (pyproject vs workflow; version.json may be absent)
@@ -215,7 +215,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.15'
+          python-version: '3.14'
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -257,7 +257,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.15'
+          python-version: '3.14'
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -294,7 +294,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.15'
+          python-version: '3.14'
 
       - name: Build Windows Portable
         run: uv run flet build windows --yes --project lm-router --product "LM Router" --org ng.kiri --company "Kiri Research Labs" --build-version ${{ env.BUILD_VERSION }} --build-number ${{ env.BUILD_NUMBER }} -v
@@ -365,7 +365,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.15'
+          python-version: '3.14'
       - name: Install Linux Build Dependencies & Packaging Tools
         run: |
           sudo apt-get update

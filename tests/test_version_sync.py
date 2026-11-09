@@ -75,8 +75,10 @@ def test_no_engine_is_vendored_in_the_repo() -> None:
 def test_interpreter_band_is_pinned() -> None:
     pyproject, _ = _load()
     requires = pyproject["project"]["requires-python"]
-    # A python-build manifest bump must never silently jump past 3.15.
-    assert "<3.16" in requires
+    # flet build packages its own runtimes and currently supports 3.12-3.14
+    # only: a 3.15 band makes every `flet build` target refuse to run
+    # (v1.2.0 tag failure). Bump this band the day flet ships 3.15 runtimes.
+    assert "<3.15" in requires
 
 
 def test_target_arch_not_restricted() -> None:
