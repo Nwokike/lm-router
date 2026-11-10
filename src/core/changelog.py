@@ -24,7 +24,8 @@ CHANGELOG: dict[str, str] = {
     "1.2.0": (
         "• Gateway-first rebuild: Server is the homepage — start the gateway, share it, watch the catalog\n"
         "• New technical Test tab: one-tap model probes with the raw REQUEST and RESPONSE JSON, collapsible reasoning, and the DDGS-style composer (Enter sends, Shift+Enter breaks the line)\n"
-        "• Background keep-alive: a foreground service + wake lock keep the gateway alive while the app is minimized, with a notification Stop action\n"
+        "• Background keep-alive: a foreground service + wake lock keep the gateway alive while the app is minimized; the notification's Exit action fully exits the app\n"
+        "• Close/reopen is clean: no more UI error spam after the app is closed while the gateway keeps running\n"
         "• Slimmer app: kani, OpenAI, MCP, pydantic and tiktoken removed — pure-stdlib settings that survive corrupt files\n"
         "• Python 3.14 runtime across every platform build"
     ),
