@@ -541,7 +541,6 @@ def SettingsScreen():
             *appearance,
             *gateway,
             build_banner_ad(),
-            build_banner_ad(),
             *about_card,
             # No banner at the floor: the owner banned them there. The spacer
             # stays last.

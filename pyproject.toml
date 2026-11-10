@@ -50,6 +50,9 @@ host = "app"
 [tool.flet.android]
 legacy_packaging = true
 bundle_id = "ng.kiri.lmrouter"
+# Our own Android resources (the notification small icon drawable), copied
+# into the generated android/app/src/main/res by flet build.
+res_dir = "android_res"
 
 [tool.flet.android.meta_data]
 "com.google.android.gms.ads.APPLICATION_ID" = "ca-app-pub-5679949845754640~4946644229"

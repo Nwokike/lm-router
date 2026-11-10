@@ -71,6 +71,10 @@ class AppController:
         # page binding and every marshaled write raises (the "UI callback
         # failed: _apply" spam, 2026-11-09).
         self._flet_ctx = contextvars.copy_context()
+        # Latched when the flet Session is destroyed (Android activity closed
+        # and the session grace window expired while the FGS keeps the
+        # process alive). Cleared by _on_connect when a session re-attaches.
+        self._session_dead = False
 
     def init(self) -> None:
         page = self.page
@@ -141,6 +145,7 @@ class AppController:
             page.on_app_lifecycle_state_change = self._on_lifecycle
             page.on_close = self._on_page_close
             page.on_disconnect = self._on_disconnect
+            page.on_connect = self._on_connect
         except Exception as exc:
             LOG.info("lifecycle hooks unavailable: %s", exc)
 
@@ -237,25 +242,54 @@ class AppController:
         direct call when the loop cannot be determined (tests/headless), and
         a timed-out or failed marshal ALSO falls back to a direct call: the
         payload is a state write, and dropping it strands a flag forever.
+
+        Session death is the one exception: when the Android activity is
+        closed, the FGS keeps the process alive but the flet Session expires
+        and is garbage-collected — every later write raises "An attempt to
+        fetch destroyed session" (page.session is a weakref). The first hit
+        latches `_session_dead` and logs once; all later writes are silent
+        no-ops (proot-distro's exact guard, app_controller.py:349). A session
+        re-attach inside the grace window fires page.on_connect, which clears
+        the latch — the same controller resumes writing.
         """
         loop = self._ui_loop
         ctx = self._flet_ctx
+
+        def _is_session_death(exc: BaseException) -> bool:
+            text = str(exc)
+            return "destroyed session" in text or "not associated" in text
+
+        def _note_session_death() -> None:
+            if not self._session_dead:
+                self._session_dead = True
+                LOG.info(
+                    "UI session destroyed; controller stops painting "
+                    "(a re-attach via on_connect resumes)"
+                )
 
         def run(*args: object, **kwargs: object) -> object:
             call = lambda: fn(*args, **kwargs)  # noqa: E731
             if loop is None:
                 return ctx.copy().run(call)
+            if self._session_dead:
+                return None  # zombie controller: the UI it painted is gone
             try:
                 on_loop = asyncio.get_running_loop() is loop
             except RuntimeError:
                 on_loop = False
             if on_loop:
-                return ctx.copy().run(call)
+                try:
+                    return ctx.copy().run(call)
+                except RuntimeError as exc:
+                    if _is_session_death(exc):
+                        _note_session_death()
+                        return None
+                    raise
 
             async def _call() -> object:
                 return ctx.copy().run(call)
 
-            def _direct(why: str) -> object:
+            def _direct(why: str, exc: BaseException) -> object:
                 """Last resort: run it here rather than drop the payload.
 
                 Losing the write is how state flags got stranded: the worker's
@@ -263,6 +297,9 @@ class AppController:
                 discarded and the button stayed dead forever. Off-loop is not
                 ideal, but writing the state beats never writing it.
                 """
+                if _is_session_death(exc):
+                    _note_session_death()
+                    return None
                 LOG.error(
                     "UI callback %s: %s",
                     why,
@@ -271,7 +308,10 @@ class AppController:
                 )
                 try:
                     return ctx.copy().run(call)
-                except Exception:
+                except Exception as fallback_exc:
+                    if _is_session_death(fallback_exc):
+                        _note_session_death()
+                        return None
                     LOG.error(
                         "UI callback direct fallback failed: %s",
                         getattr(fn, "__name__", fn),
@@ -281,11 +321,11 @@ class AppController:
 
             try:
                 return asyncio.run_coroutine_threadsafe(_call(), loop).result(timeout=30)
-            except TimeoutError:
-                return _direct("timed out")
-            except Exception:
+            except TimeoutError as exc:
+                return _direct("timed out", exc)
+            except Exception as exc:
                 # Closed loop, dead connection, anything but a timeout.
-                return _direct("failed")
+                return _direct("failed", exc)
 
         return run
 
@@ -1214,13 +1254,35 @@ class AppController:
             LOG.info("lifecycle handling failed: %s", exc)
 
     def _on_disconnect(self, e: object = None) -> None:
-        # Flet 1.0 exits without running atexit/buffered writes — flush
-        # synchronously: the loop is already closing, so page.run_task would
-        # leave the coroutine un-awaited (DDGS's rationale, verbatim).
+        # The UI connection is gone (Android activity destroyed / console
+        # closed). Flush synchronously: the loop may be closing, so
+        # page.run_task would leave the coroutine un-awaited (DDGS rationale).
+        # The gateway and the FGS intentionally KEEP RUNNING — that is the
+        # keep-alive's whole purpose (CollabShell stops its remote sessions
+        # here because they are billable compute; our gateway is the product).
+        # If the session later re-attaches (grace window), _on_connect clears
+        # the latch and the controller resumes painting.
         try:
             self.settings.save()
         except Exception as exc:
             LOG.debug("disconnect flush failed: %s", exc)
+        self._session_dead = True
+        task = self._log_flush_task
+        if task is not None:
+            with contextlib.suppress(Exception):
+                task.cancel()
+            self._log_flush_task = None
+
+    def _on_connect(self, e: object = None) -> None:
+        """Session re-attached inside the grace window: resume painting.
+
+        Same controller, same session — the latch clears and state writes
+        marshal again (the engine watcher's 3s cadence picks up where it
+        left off). Also fires on the initial connect, which is harmless.
+        """
+        if self._session_dead:
+            self._session_dead = False
+            LOG.info("UI session re-attached; controller resumes painting")
 
     # --- teardown ----------------------------------------------------------
 

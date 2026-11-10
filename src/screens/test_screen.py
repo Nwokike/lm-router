@@ -18,6 +18,7 @@ import time
 
 import flet as ft
 
+from components.banner_ad import build_banner_ad
 from components.thinking import ThinkingBlock
 from core import theme, tokens
 from core.catalog import chat_models
@@ -418,6 +419,7 @@ def TestScreen():
                     auto_scroll=False,
                 ),
             ),
+            build_banner_ad(),
             composer,
         ],
     )

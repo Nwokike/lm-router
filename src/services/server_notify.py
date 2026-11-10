@@ -1,23 +1,30 @@
 """Android foreground service + wake lock for the LM Router gateway.
 
 Keeps the Android process alive when the app is minimised while the gateway
-is running. A sticky foreground notification appears with a Stop action.
-Tapping Stop calls the on_stop callback which runs _stop_gateway().
+is running. A sticky foreground notification appears with an Exit action.
+Tapping Exit performs the full app exit: stop the FGS, then kill the process
+(page-independent, so it works from the shade even after the UI session has
+expired) — CollabShell's session_notify.exit_app pattern, verbatim.
 
 Ported from CollabShell's services/session_notify.py (which itself came from
-proot-distro-flet) — same flet-notifications 1.1.0 pattern, same guard style.
+proot-distro-flet) — same flet-notifications pattern, same guard style.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 
 import flet as ft
 
 LOG = logging.getLogger("lmrouter")
 
 _FGS_ID = 1  # nonzero: the plugin rejects id=0
-_FGS_ICON = "flet_notifications_icon"  # default silhouette shipped by the plugin
+# Our own app-icon silhouette, bundled via [tool.flet.android] res_dir
+# (android_res/drawable-*/ic_stat_lmrouter.png) — same pattern as CollabShell
+# and proot-distro. Never the plugin's flat default.
+_FGS_ICON = "ic_stat_lmrouter"
 
 
 class ServerNotificationService:
@@ -86,7 +93,8 @@ class ServerNotificationService:
             return False
 
     async def start(self, port: int) -> None:
-        """Start the FGS notification when the gateway comes up."""
+        """Start the FGS notification + wake lock when the gateway comes up."""
+        await self.wakelock_set(True)
         if self._notifications is None or not self._is_android():
             return
         if self._fgs_running:
@@ -101,7 +109,7 @@ class ServerNotificationService:
                 payload="gateway:running",
                 start_type=ftn.AndroidServiceStartType.STICKY,
                 service_types=[ftn.AndroidForegroundServiceType.SPECIAL_USE],
-                actions=[ftn.NotificationAction(id="stop", title="Stop")],
+                actions=[ftn.NotificationAction(id="exit", title="Exit")],
             )
             self._fgs_running = True
             LOG.info("FGS started (port %d)", port)
@@ -109,7 +117,13 @@ class ServerNotificationService:
             LOG.warning("FGS start failed: %s", exc)
 
     async def stop(self) -> None:
-        """Remove the FGS notification when the gateway stops."""
+        """Remove the FGS notification + release the wake lock.
+
+        One call covers every shutdown path (gateway stop, in-app Quit,
+        notification Exit) so no wake lock leaks when the process outlives
+        the UI session.
+        """
+        await self.wakelock_set(False)
         if self._notifications is None or not self._fgs_running:
             return
         try:
@@ -138,22 +152,44 @@ class ServerNotificationService:
 
     def _handle_action(self, e) -> None:
         """User pressed an action button on the notification."""
-        if getattr(e, "action_id", "") != "stop":
+        if getattr(e, "action_id", "") != "exit":
             return
-        # Fire the stop-gateway callback on the Flet loop, same as a UI tap.
-        if self._on_stop is not None and self._page is not None:
-            try:
-                self._page.run_task(self._async_stop_gateway)
-            except Exception as exc:
-                LOG.debug("notification stop action dispatch failed: %s", exc)
+        # Exit must work from the shade even when the UI session is dead, so
+        # it runs page-independent: FGS stop, then process kill. No Flet
+        # loop involvement at all.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        try:
+            if loop is not None:
+                loop.create_task(self.exit_app())
+            else:
+                asyncio.run(self.exit_app())
+        except Exception as exc:
+            LOG.debug("notification exit dispatch failed: %s", exc)
 
-    async def _async_stop_gateway(self) -> None:
-        """Thin async wrapper so run_task can call the sync _on_stop callback."""
-        if self._on_stop is not None:
-            try:
-                self._on_stop()
-            except Exception as exc:
-                LOG.debug("notification stop callback failed: %s", exc)
+    async def exit_app(self) -> None:
+        """The notification's Exit button: stop FGS, then kill the process.
+
+        CollabShell's session_notify.exit_app verbatim: FGS stop, jnius
+        Process.killProcess(myPid()), os._exit(0) as the fallback when jnius
+        is unavailable (desktop/tests). The gateway dies with the process —
+        that is what "Exit closes it" means.
+        """
+        try:
+            await self.stop()
+        except Exception as exc:
+            LOG.debug("exit: FGS stop failed: %s", exc)
+        try:
+            from jnius import autoclass  # type: ignore
+
+            proc = autoclass("android.os.Process")
+            proc.killProcess(proc.myPid())
+            return
+        except Exception as exc:
+            LOG.debug("jnius process kill unavailable (%s); using os._exit", exc)
+        os._exit(0)
 
     def _handle_tap(self, e) -> None:
         """User tapped the notification body — no action needed (just brings app forward)."""
