@@ -173,6 +173,9 @@ jobs:
       MAKE_LATEST: ${{ steps.tag_info.outputs.MAKE_LATEST }}
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.14'
       - name: Generate Release Tag & Name
         id: tag_info
         run: |
